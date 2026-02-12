@@ -20,9 +20,11 @@ juce::Colour ThemeEngine::colourFor(BandEnergies energies,
 
     const auto saturationFloor = (theme == ThemePreset::minimeters3Band) ? 0.55f : 0.35f;
     const auto brightnessFloor = (theme == ThemePreset::minimeters3Band) ? 0.6f : 0.45f;
+    const auto alphaFloor = (mode == ColorMode::threeBand) ? 0.35f : 0.2f;
 
     const auto saturation = juce::jlimit(0.05f, 1.0f, saturationFloor + (1.0f - saturationFloor) * intensity);
-    const auto alpha = juce::jlimit(0.15f, 1.0f, 0.2f + 0.8f * amp);
+    const auto ampShaped = std::sqrt(amp);
+    const auto alpha = juce::jlimit(0.15f, 1.0f, alphaFloor + (1.0f - alphaFloor) * ampShaped);
 
     base = base.withMultipliedSaturation(saturation)
                .withMultipliedBrightness(brightnessFloor + (1.0f - brightnessFloor) * intensity)
