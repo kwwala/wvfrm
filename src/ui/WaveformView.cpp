@@ -65,11 +65,7 @@ void WaveformView::paint(juce::Graphics& g)
     g.setColour(juce::Colours::white.withAlpha(0.8f));
     g.setFont(juce::FontOptions(14.0f, juce::Font::plain));
 
-    const juce::String modeText = (getChoiceIndex(state, ParamIDs::timeMode) == static_cast<int>(TimeMode::sync))
-        ? "SYNC"
-        : "MS";
-
-    const auto windowText = juce::String::formatted("Window: %.1f ms (%s)", resolved.ms, modeText.toRawUTF8());
+    const auto windowText = juce::String::formatted("Window: %.1f ms", resolved.ms);
     g.drawText(windowText, topLabel.removeFromLeft(300), juce::Justification::centredLeft);
 
     if (! resolved.tempoReliable && getChoiceIndex(state, ParamIDs::timeMode) == static_cast<int>(TimeMode::sync))
