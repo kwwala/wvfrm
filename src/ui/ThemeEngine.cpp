@@ -18,12 +18,21 @@ juce::Colour ThemeEngine::colourFor(BandEnergies energies,
         ? blendThreeBand(energies, theme)
         : colourFromPreset(theme);
 
-    const auto saturationFloor = (theme == ThemePreset::minimeters3Band) ? 0.55f : 0.35f;
-    const auto brightnessFloor = (theme == ThemePreset::minimeters3Band) ? 0.6f : 0.45f;
-    const auto alphaFloor = (mode == ColorMode::threeBand) ? 0.35f : 0.2f;
+    auto saturationFloor = 0.35f;
+    auto brightnessFloor = 0.45f;
+    auto alphaFloor = (mode == ColorMode::threeBand) ? 0.35f : 0.2f;
+    auto ampShaped = std::sqrt(amp);
+
+    if (theme == ThemePreset::minimeters3Band)
+    {
+        saturationFloor = 0.6f;
+        brightnessFloor = 0.55f;
+        if (mode == ColorMode::threeBand)
+            alphaFloor = 0.25f;
+        ampShaped = std::pow(amp, 0.65f);
+    }
 
     const auto saturation = juce::jlimit(0.05f, 1.0f, saturationFloor + (1.0f - saturationFloor) * intensity);
-    const auto ampShaped = std::sqrt(amp);
     const auto alpha = juce::jlimit(0.15f, 1.0f, alphaFloor + (1.0f - alphaFloor) * ampShaped);
 
     base = base.withMultipliedSaturation(saturation)
@@ -55,10 +64,11 @@ juce::Colour ThemeEngine::blendThreeBand(const BandEnergies& energies, ThemePres
 
     if (theme == ThemePreset::minimeters3Band)
     {
-        constexpr auto gamma = 2.35f;
-        auto rEnergy = std::pow(low, gamma);
-        auto gEnergy = std::pow(mid, gamma);
-        auto bEnergy = std::pow(high, gamma);
+        constexpr auto gamma = 1.7f;
+        constexpr auto energyFloor = 0.03f;
+        auto rEnergy = std::pow(low, gamma) + energyFloor;
+        auto gEnergy = std::pow(mid, gamma) + energyFloor;
+        auto bEnergy = std::pow(high, gamma) + energyFloor;
         const auto total = rEnergy + gEnergy + bEnergy;
 
         if (total > 1.0e-6f)
@@ -68,12 +78,10 @@ juce::Colour ThemeEngine::blendThreeBand(const BandEnergies& energies, ThemePres
             bEnergy /= total;
         }
 
-        const auto r = juce::jlimit(0, 255, static_cast<int>(255.0f * rEnergy));
-        const auto g = juce::jlimit(0, 255, static_cast<int>(255.0f * gEnergy));
-        const auto b = juce::jlimit(0, 255, static_cast<int>(255.0f * bEnergy));
-        return juce::Colour::fromRGB(static_cast<juce::uint8>(r),
-                                     static_cast<juce::uint8>(g),
-                                     static_cast<juce::uint8>(b));
+        const auto r = juce::jlimit(0.0f, 1.0f, static_cast<float>(rEnergy));
+        const auto g = juce::jlimit(0.0f, 1.0f, static_cast<float>(gEnergy));
+        const auto b = juce::jlimit(0.0f, 1.0f, static_cast<float>(bEnergy));
+        return juce::Colour::fromFloatRGBA(r, g, b, 1.0f);
     }
 
     if (theme == ThemePreset::rekordboxInspired)

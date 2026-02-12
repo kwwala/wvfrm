@@ -2,6 +2,8 @@
 
 #include "../JuceIncludes.h"
 
+#include <vector>
+
 #include "../Parameters.h"
 #include "../dsp/BandAnalyzer3.h"
 #include "ThemeEngine.h"
@@ -58,6 +60,11 @@ private:
     ThemeEngine themeEngine;
 
     mutable juce::AudioBuffer<float> scratch;
+    mutable std::vector<BandEnergies> energiesPerX;
+    mutable std::vector<float> minPerX;
+    mutable std::vector<float> maxPerX;
+    mutable std::vector<float> ampPerX;
+    mutable std::vector<uint8_t> activePerX;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WaveformView)
 };

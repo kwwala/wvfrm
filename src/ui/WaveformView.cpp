@@ -20,16 +20,7 @@ void WaveformView::paint(juce::Graphics& g)
 {
     const auto bounds = getLocalBounds();
 
-    juce::ColourGradient background(juce::Colour::fromRGB(7, 10, 16),
-                                    static_cast<float>(bounds.getX()),
-                                    static_cast<float>(bounds.getY()),
-                                    juce::Colour::fromRGB(15, 26, 32),
-                                    static_cast<float>(bounds.getRight()),
-                                    static_cast<float>(bounds.getBottom()),
-                                    false);
-    background.addColour(0.55, juce::Colour::fromRGB(12, 22, 35));
-    g.setGradientFill(background);
-    g.fillRect(bounds);
+    g.fillAll(juce::Colour::fromRGB(4, 4, 6));
 
     const auto resolved = processor.resolveCurrentWindow();
     const auto sampleRate = processor.getCurrentSampleRateHz();
@@ -40,7 +31,7 @@ void WaveformView::paint(juce::Graphics& g)
 
     if (! processor.copyRecentSamples(scratch, requestedSamples))
     {
-        g.setColour(juce::Colours::white.withAlpha(0.75f));
+        g.setColour(juce::Colours::white.withAlpha(0.6f));
         g.setFont(juce::FontOptions(16.0f, juce::Font::plain));
         g.drawText("Waiting for audio...", bounds, juce::Justification::centred);
         return;
@@ -62,7 +53,7 @@ void WaveformView::paint(juce::Graphics& g)
     auto contentBounds = bounds.reduced(8);
     auto topLabel = contentBounds.removeFromTop(24);
 
-    g.setColour(juce::Colours::white.withAlpha(0.8f));
+    g.setColour(juce::Colours::white.withAlpha(0.6f));
     g.setFont(juce::FontOptions(14.0f, juce::Font::plain));
 
     const auto windowText = juce::String::formatted("Window: %.1f ms", resolved.ms);
@@ -70,9 +61,9 @@ void WaveformView::paint(juce::Graphics& g)
 
     if (! resolved.tempoReliable && getChoiceIndex(state, ParamIDs::timeMode) == static_cast<int>(TimeMode::sync))
     {
-        g.setColour(juce::Colour::fromRGB(230, 170, 60));
-        g.drawText("Tempo indisponivel: fallback ativo", topLabel, juce::Justification::centredRight);
-    }
+    g.setColour(juce::Colour::fromRGB(230, 170, 60).withAlpha(0.7f));
+    g.drawText("Tempo indisponivel: fallback ativo", topLabel, juce::Justification::centredRight);
+}
 
     std::vector<TrackDescriptor> tracks;
 
@@ -154,13 +145,13 @@ void WaveformView::drawTrack(juce::Graphics& g,
     if (numSamples <= 0)
         return;
 
-    g.setColour(juce::Colour::fromRGB(255, 255, 255).withAlpha(0.08f));
+    g.setColour(juce::Colour::fromRGB(255, 255, 255).withAlpha(0.04f));
     g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 5.0f, 1.0f);
 
     const auto centerY = static_cast<float>(bounds.getCentreY());
-    const auto halfHeight = static_cast<float>(bounds.getHeight()) * 0.46f;
+    const auto halfHeight = static_cast<float>(bounds.getHeight()) * 0.49f;
 
-    g.setColour(juce::Colours::white.withAlpha(0.13f));
+    g.setColour(juce::Colours::white.withAlpha(0.06f));
     g.drawHorizontalLine(bounds.getCentreY(), static_cast<float>(bounds.getX()), static_cast<float>(bounds.getRight()));
 
     constexpr auto loopVisualFraction = 0.5f;
@@ -183,86 +174,159 @@ void WaveformView::drawTrack(juce::Graphics& g,
     std::vector<float> derived;
     derived.resize(static_cast<size_t>(maxSamplesPerPixel));
 
-    for (int x = 0; x < width; ++x)
+    const auto activeWidth = loopEnabled ? filledPixels : width;
+    const auto requiredSize = static_cast<size_t>(width);
+
+    if (energiesPerX.size() < requiredSize)
     {
-        if (loopEnabled && (x >= filledPixels || filledPixels <= 0))
+        energiesPerX.resize(requiredSize);
+        minPerX.resize(requiredSize);
+        maxPerX.resize(requiredSize);
+        ampPerX.resize(requiredSize);
+        activePerX.resize(requiredSize);
+    }
+
+    for (int x = 0; x < width; ++x)
+        activePerX[static_cast<size_t>(x)] = 0;
+
+    if (activeWidth > 0)
+    {
+        for (int x = 0; x < activeWidth; ++x)
+        {
+            int start = 0;
+            int end = 0;
+
+            if (loopEnabled)
+            {
+                const auto x0 = static_cast<double>(x);
+                const auto x1 = static_cast<double>(x + 1);
+                const auto filledPixelsDouble = static_cast<double>(juce::jmax(1, filledPixels));
+                const auto filledSamplesDouble = static_cast<double>(filledSamples);
+
+                start = cycleStartSample + static_cast<int>(std::floor((x0 / filledPixelsDouble) * filledSamplesDouble));
+                end = cycleStartSample + static_cast<int>(std::floor((x1 / filledPixelsDouble) * filledSamplesDouble));
+                end = juce::jmax(end, start + 1);
+                end = juce::jmin(end, numSamples);
+            }
+            else
+            {
+                const auto samplesPerPixel = juce::jmax(1, numSamples / juce::jmax(1, width));
+                start = x * samplesPerPixel;
+                end = juce::jmin(numSamples, start + samplesPerPixel);
+            }
+
+            if (start >= end)
+                continue;
+
+            float minimum = std::numeric_limits<float>::max();
+            float maximum = -std::numeric_limits<float>::max();
+
+            const float* segmentData = nullptr;
+            const auto segmentLength = end - start;
+
+            if (mode == RenderMode::left)
+            {
+                segmentData = source.getReadPointer(0, start);
+
+                for (int s = start; s < end; ++s)
+                {
+                    const auto value = source.getSample(0, s);
+                    minimum = juce::jmin(minimum, value);
+                    maximum = juce::jmax(maximum, value);
+                }
+            }
+            else if (mode == RenderMode::right)
+            {
+                const auto rightChannel = source.getNumChannels() > 1 ? 1 : 0;
+                segmentData = source.getReadPointer(rightChannel, start);
+
+                for (int s = start; s < end; ++s)
+                {
+                    const auto value = source.getSample(rightChannel, s);
+                    minimum = juce::jmin(minimum, value);
+                    maximum = juce::jmax(maximum, value);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < segmentLength; ++i)
+                {
+                    const auto sample = sampleForMode(mode, source, start + i);
+                    derived[static_cast<size_t>(i)] = sample;
+                    minimum = juce::jmin(minimum, sample);
+                    maximum = juce::jmax(maximum, sample);
+                }
+
+                segmentData = derived.data();
+            }
+
+            minimum *= gainLinear;
+            maximum *= gainLinear;
+
+            const auto amplitudeNorm = juce::jlimit(0.0f, 1.0f, (std::abs(maximum) + std::abs(minimum)) * 0.5f);
+            const auto energies = bandAnalyzer.analyzeSegment(segmentData,
+                                                              segmentLength,
+                                                              processor.getCurrentSampleRateHz(),
+                                                              smoothing);
+
+            const auto index = static_cast<size_t>(x);
+            minPerX[index] = minimum;
+            maxPerX[index] = maximum;
+            ampPerX[index] = amplitudeNorm;
+            energiesPerX[index] = energies;
+            activePerX[index] = 1;
+        }
+    }
+
+    const auto blurColors = (themePreset == ThemePreset::minimeters3Band)
+        && (colorMode == ColorMode::threeBand);
+
+    const int offsets[5] = { -2, -1, 0, 1, 2 };
+    const float weights[5] = { 1.0f, 2.0f, 4.0f, 2.0f, 1.0f };
+
+    for (int x = 0; x < activeWidth; ++x)
+    {
+        const auto index = static_cast<size_t>(x);
+        if (activePerX[index] == 0)
             continue;
 
-        int start = 0;
-        int end = 0;
+        BandEnergies energies = energiesPerX[index];
+        float amplitudeNorm = ampPerX[index];
 
-        if (loopEnabled)
+        if (blurColors)
         {
-            const auto x0 = static_cast<double>(x);
-            const auto x1 = static_cast<double>(x + 1);
-            const auto filledPixelsDouble = static_cast<double>(juce::jmax(1, filledPixels));
-            const auto filledSamplesDouble = static_cast<double>(filledSamples);
+            float weightSum = 0.0f;
+            float lowSum = 0.0f;
+            float midSum = 0.0f;
+            float highSum = 0.0f;
+            float ampSum = 0.0f;
 
-            start = cycleStartSample + static_cast<int>(std::floor((x0 / filledPixelsDouble) * filledSamplesDouble));
-            end = cycleStartSample + static_cast<int>(std::floor((x1 / filledPixelsDouble) * filledSamplesDouble));
-            end = juce::jmax(end, start + 1);
-            end = juce::jmin(end, numSamples);
-        }
-        else
-        {
-            const auto samplesPerPixel = juce::jmax(1, numSamples / juce::jmax(1, width));
-            start = x * samplesPerPixel;
-            end = juce::jmin(numSamples, start + samplesPerPixel);
-        }
-
-        if (start >= end)
-            continue;
-
-        float minimum = std::numeric_limits<float>::max();
-        float maximum = -std::numeric_limits<float>::max();
-
-        const float* segmentData = nullptr;
-        const auto segmentLength = end - start;
-
-        if (mode == RenderMode::left)
-        {
-            segmentData = source.getReadPointer(0, start);
-
-            for (int s = start; s < end; ++s)
+            for (int i = 0; i < 5; ++i)
             {
-                const auto value = source.getSample(0, s);
-                minimum = juce::jmin(minimum, value);
-                maximum = juce::jmax(maximum, value);
-            }
-        }
-        else if (mode == RenderMode::right)
-        {
-            const auto rightChannel = source.getNumChannels() > 1 ? 1 : 0;
-            segmentData = source.getReadPointer(rightChannel, start);
+                const auto nx = x + offsets[i];
+                if (nx < 0 || nx >= activeWidth)
+                    continue;
 
-            for (int s = start; s < end; ++s)
-            {
-                const auto value = source.getSample(rightChannel, s);
-                minimum = juce::jmin(minimum, value);
-                maximum = juce::jmax(maximum, value);
-            }
-        }
-        else
-        {
-            for (int i = 0; i < segmentLength; ++i)
-            {
-                const auto sample = sampleForMode(mode, source, start + i);
-                derived[static_cast<size_t>(i)] = sample;
-                minimum = juce::jmin(minimum, sample);
-                maximum = juce::jmax(maximum, sample);
+                const auto nIndex = static_cast<size_t>(nx);
+                if (activePerX[nIndex] == 0)
+                    continue;
+
+                const auto w = weights[i];
+                weightSum += w;
+                lowSum += energiesPerX[nIndex].low * w;
+                midSum += energiesPerX[nIndex].mid * w;
+                highSum += energiesPerX[nIndex].high * w;
+                ampSum += ampPerX[nIndex] * w;
             }
 
-            segmentData = derived.data();
+            if (weightSum > 0.0f)
+            {
+                energies.low = lowSum / weightSum;
+                energies.mid = midSum / weightSum;
+                energies.high = highSum / weightSum;
+                amplitudeNorm = ampSum / weightSum;
+            }
         }
-
-        minimum *= gainLinear;
-        maximum *= gainLinear;
-
-        const auto amplitudeNorm = juce::jlimit(0.0f, 1.0f, (std::abs(maximum) + std::abs(minimum)) * 0.5f);
-        const auto energies = bandAnalyzer.analyzeSegment(segmentData,
-                                                          segmentLength,
-                                                          processor.getCurrentSampleRateHz(),
-                                                          smoothing);
 
         g.setColour(themeEngine.colourFor(energies,
                                           themePreset,
@@ -272,13 +336,14 @@ void WaveformView::drawTrack(juce::Graphics& g,
 
         const auto yMax = juce::jlimit(static_cast<float>(bounds.getY()),
                                        static_cast<float>(bounds.getBottom()),
-                                       centerY - maximum * halfHeight);
+                                       centerY - maxPerX[index] * halfHeight);
 
         const auto yMin = juce::jlimit(static_cast<float>(bounds.getY()),
                                        static_cast<float>(bounds.getBottom()),
-                                       centerY - minimum * halfHeight);
+                                       centerY - minPerX[index] * halfHeight);
 
-        g.drawVerticalLine(bounds.getX() + x, yMax, yMin);
+        const auto xPos = static_cast<float>(bounds.getX() + x) + 0.5f;
+        g.drawLine(xPos, yMax, xPos, yMin, 1.2f);
     }
 
     if (loopEnabled)
@@ -287,7 +352,7 @@ void WaveformView::drawTrack(juce::Graphics& g,
         g.drawVerticalLine(bounds.getX() + targetPixels, static_cast<float>(bounds.getY() + 2), static_cast<float>(bounds.getBottom() - 2));
     }
 
-    g.setColour(juce::Colours::white.withAlpha(0.65f));
+    g.setColour(juce::Colours::white.withAlpha(0.6f));
     g.setFont(juce::FontOptions(12.0f, juce::Font::plain));
     g.drawText(label, bounds.reduced(8), juce::Justification::topLeft);
 }
