@@ -16,6 +16,7 @@ constexpr auto defaultThemeIntensity = 100.0f;
 constexpr auto defaultWaveGain = 0.0f;
 constexpr auto defaultSmoothing = 35.0f;
 constexpr auto defaultUiScale = 100.0f;
+constexpr auto defaultWaveLoop = false;
 }
 
 juce::StringArray getTimeModeChoices()
@@ -106,6 +107,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         "UI Scale",
         juce::NormalisableRange<float>(50.0f, 200.0f, 0.1f),
         defaultUiScale));
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        ParamIDs::waveLoop,
+        "Wave Loop",
+        defaultWaveLoop));
 
     return { params.begin(), params.end() };
 }

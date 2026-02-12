@@ -45,6 +45,7 @@ public:
 
     TimeWindowResolver::ResolvedWindow resolveCurrentWindow() const noexcept;
     bool copyRecentSamples(juce::AudioBuffer<float>& destination, int numSamples) const;
+    double getLoopPhaseNormalized() const noexcept;
 
     double getCurrentSampleRateHz() const noexcept;
     int getAnalysisCapacity() const noexcept;
@@ -60,6 +61,9 @@ private:
     std::atomic<double> hostTempoBpm { 120.0 };
     std::atomic<double> lastKnownBpm { 120.0 };
     std::atomic<bool> tempoReliable { false };
+    std::atomic<double> hostPpqPosition { 0.0 };
+    std::atomic<bool> ppqReliable { false };
+    std::atomic<long long> processedSamples { 0 };
 
     std::atomic<int> editorWidth { 960 };
     std::atomic<int> editorHeight { 540 };

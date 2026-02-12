@@ -46,6 +46,8 @@ private:
                    ThemePreset themePreset,
                    ColorMode colorMode,
                    float intensity,
+                   bool loopEnabled,
+                   float loopPhase,
                    float gainLinear,
                    float smoothing) const;
 

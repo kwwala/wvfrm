@@ -37,6 +37,7 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     configureLabel(themeIntensityLabel, "Intensity");
     configureLabel(waveGainLabel, "Gain dB");
     configureLabel(smoothingLabel, "Smoothing");
+    configureLabel(loopLabel, "Loop");
 
     addAndMakeVisible(timeModeLabel);
     addAndMakeVisible(timeDivisionLabel);
@@ -47,6 +48,7 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     addAndMakeVisible(themeIntensityLabel);
     addAndMakeVisible(waveGainLabel);
     addAndMakeVisible(smoothingLabel);
+    addAndMakeVisible(loopLabel);
 
     configureCombo(timeModeBox, getTimeModeChoices());
     configureCombo(timeDivisionBox, getTimeDivisionChoices());
@@ -70,6 +72,10 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     addAndMakeVisible(waveGainSlider);
     addAndMakeVisible(smoothingSlider);
 
+    loopButton.setButtonText("Enable");
+    loopButton.setColour(juce::ToggleButton::textColourId, juce::Colours::white.withAlpha(0.9f));
+    addAndMakeVisible(loopButton);
+
     addAndMakeVisible(waveformView);
 
     timeModeAttachment = std::make_unique<ComboAttachment>(state, ParamIDs::timeMode, timeModeBox);
@@ -82,6 +88,7 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     themeIntensityAttachment = std::make_unique<SliderAttachment>(state, ParamIDs::themeIntensity, themeIntensitySlider);
     waveGainAttachment = std::make_unique<SliderAttachment>(state, ParamIDs::waveGainVisual, waveGainSlider);
     smoothingAttachment = std::make_unique<SliderAttachment>(state, ParamIDs::smoothing, smoothingSlider);
+    loopAttachment = std::make_unique<ButtonAttachment>(state, ParamIDs::waveLoop, loopButton);
 
     timeModeBox.onChange = [this] { updateTimeControls(); };
 
@@ -135,12 +142,14 @@ void WaveformAudioProcessorEditor::resized()
     themeIntensityLabel.setBounds(row3.removeFromLeft(cellWidth));
     waveGainLabel.setBounds(row3.removeFromLeft(cellWidth));
     smoothingLabel.setBounds(row3.removeFromLeft(cellWidth));
+    loopLabel.setBounds(row3.removeFromLeft(cellWidth));
 
     auto row4 = controls.removeFromTop(30);
     themePresetBox.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
     themeIntensitySlider.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
     waveGainSlider.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
     smoothingSlider.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
+    loopButton.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
 
     bounds.removeFromTop(8);
     waveformView.setBounds(bounds);

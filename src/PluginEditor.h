@@ -21,6 +21,7 @@ public:
 private:
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
+    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
     void configureCombo(juce::ComboBox& box, const juce::StringArray& choices);
     void configureKnob(juce::Slider& slider, const juce::String& suffix);
@@ -43,6 +44,7 @@ private:
     juce::Slider themeIntensitySlider;
     juce::Slider waveGainSlider;
     juce::Slider smoothingSlider;
+    juce::ToggleButton loopButton;
 
     juce::Label timeModeLabel;
     juce::Label timeDivisionLabel;
@@ -53,6 +55,7 @@ private:
     juce::Label themeIntensityLabel;
     juce::Label waveGainLabel;
     juce::Label smoothingLabel;
+    juce::Label loopLabel;
 
     WaveformView waveformView;
 
@@ -66,6 +69,7 @@ private:
     std::unique_ptr<SliderAttachment> themeIntensityAttachment;
     std::unique_ptr<SliderAttachment> waveGainAttachment;
     std::unique_ptr<SliderAttachment> smoothingAttachment;
+    std::unique_ptr<ButtonAttachment> loopAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WaveformAudioProcessorEditor)
 };

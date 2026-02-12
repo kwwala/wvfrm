@@ -11,6 +11,20 @@ namespace
 constexpr auto stateType = "wvfrm_state";
 constexpr auto editorWidthProperty = "editor_width";
 constexpr auto editorHeightProperty = "editor_height";
+
+double getDivisionBeats(int divisionIndex) noexcept
+{
+    const auto clamped = juce::jlimit(0, static_cast<int>(TimeWindowResolver::divisions.size()) - 1, divisionIndex);
+    const auto division = TimeWindowResolver::divisions[static_cast<size_t>(clamped)];
+    return 4.0 * static_cast<double>(division.numerator) / static_cast<double>(division.denominator);
+}
+
+double positiveFraction(double value) noexcept
+{
+    const auto floored = std::floor(value);
+    const auto fraction = value - floored;
+    return fraction < 0.0 ? (fraction + 1.0) : fraction;
+}
 }
 
 WaveformAudioProcessor::WaveformAudioProcessor()
@@ -24,6 +38,7 @@ WaveformAudioProcessor::WaveformAudioProcessor()
 void WaveformAudioProcessor::prepareToPlay(double sampleRate, int)
 {
     currentSampleRate.store(sampleRate);
+    processedSamples.store(0);
 
     const auto capacity = juce::jlimit(65536, 2 * 1024 * 1024, static_cast<int>(std::ceil(sampleRate * 9.0)));
     analysisBuffer.prepare(2, capacity);
@@ -64,15 +79,27 @@ void WaveformAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
             {
                 tempoReliable.store(false);
             }
+
+            if (const auto ppq = position->getPpqPosition())
+            {
+                hostPpqPosition.store(*ppq);
+                ppqReliable.store(true);
+            }
+            else
+            {
+                ppqReliable.store(false);
+            }
         }
         else
         {
             tempoReliable.store(false);
+            ppqReliable.store(false);
         }
     }
     else
     {
         tempoReliable.store(false);
+        ppqReliable.store(false);
     }
 
     const auto totalInputChannels = getTotalNumInputChannels();
@@ -82,6 +109,7 @@ void WaveformAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         buffer.clear(channel, 0, buffer.getNumSamples());
 
     analysisBuffer.pushBuffer(buffer);
+    processedSamples.fetch_add(buffer.getNumSamples());
 }
 
 juce::AudioProcessorEditor* WaveformAudioProcessor::createEditor()
@@ -211,6 +239,25 @@ TimeWindowResolver::ResolvedWindow WaveformAudioProcessor::resolveCurrentWindow(
 bool WaveformAudioProcessor::copyRecentSamples(juce::AudioBuffer<float>& destination, int numSamples) const
 {
     return analysisBuffer.copyMostRecent(destination, numSamples);
+}
+
+double WaveformAudioProcessor::getLoopPhaseNormalized() const noexcept
+{
+    const auto mode = getChoiceIndex(parameters, ParamIDs::timeMode);
+    const auto division = getChoiceIndex(parameters, ParamIDs::timeSyncDivision);
+
+    if (mode == static_cast<int>(TimeMode::sync) && ppqReliable.load())
+    {
+        const auto beatsInLoop = juce::jmax(1.0e-9, getDivisionBeats(division));
+        const auto ppq = hostPpqPosition.load();
+        return positiveFraction(ppq / beatsInLoop);
+    }
+
+    const auto resolved = resolveCurrentWindow();
+    const auto intervalSeconds = juce::jmax(1.0e-6, resolved.ms * 0.001);
+    const auto intervalSamples = juce::jmax(1.0, intervalSeconds * currentSampleRate.load());
+    const auto samples = static_cast<double>(processedSamples.load());
+    return positiveFraction(samples / intervalSamples);
 }
 
 double WaveformAudioProcessor::getCurrentSampleRateHz() const noexcept

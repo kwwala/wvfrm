@@ -53,6 +53,8 @@ void WaveformView::paint(juce::Graphics& g)
     const auto themePreset = static_cast<ThemePreset>(getChoiceIndex(state, ParamIDs::themePreset));
     const auto intensity = getFloatValue(state, ParamIDs::themeIntensity, 100.0f);
     const auto smoothing = getFloatValue(state, ParamIDs::smoothing, 35.0f) / 100.0f;
+    const auto loopEnabled = getFloatValue(state, ParamIDs::waveLoop, 0.0f) > 0.5f;
+    const auto loopPhase = static_cast<float>(processor.getLoopPhaseNormalized());
 
     const auto gainDb = getFloatValue(state, ParamIDs::waveGainVisual, 0.0f);
     const auto gainLinear = juce::Decibels::decibelsToGain(gainDb);
@@ -125,6 +127,8 @@ void WaveformView::paint(juce::Graphics& g)
                   themePreset,
                   colorMode,
                   intensity,
+                  loopEnabled,
+                  loopPhase,
                   gainLinear,
                   smoothing);
     }
@@ -143,6 +147,8 @@ void WaveformView::drawTrack(juce::Graphics& g,
                              ThemePreset themePreset,
                              ColorMode colorMode,
                              float intensity,
+                             bool loopEnabled,
+                             float loopPhase,
                              float gainLinear,
                              float smoothing) const
 {
@@ -161,15 +167,52 @@ void WaveformView::drawTrack(juce::Graphics& g,
     g.setColour(juce::Colours::white.withAlpha(0.13f));
     g.drawHorizontalLine(bounds.getCentreY(), static_cast<float>(bounds.getX()), static_cast<float>(bounds.getRight()));
 
-    const auto samplesPerPixel = juce::jmax(1, numSamples / width);
+    constexpr auto loopVisualFraction = 0.5f;
+    const auto clampedLoopPhase = juce::jlimit(0.0f, 1.0f, loopPhase);
+    const auto targetPixels = loopEnabled
+        ? juce::jmax(1, static_cast<int>(std::round(static_cast<float>(width) * loopVisualFraction)))
+        : width;
+    const auto filledPixels = loopEnabled
+        ? juce::jlimit(0, targetPixels, static_cast<int>(std::round(clampedLoopPhase * static_cast<float>(targetPixels))))
+        : width;
+    const auto filledSamples = loopEnabled
+        ? juce::jlimit(0, numSamples, static_cast<int>(std::round(clampedLoopPhase * static_cast<float>(numSamples))))
+        : numSamples;
+    const auto cycleStartSample = loopEnabled ? juce::jmax(0, numSamples - filledSamples) : 0;
+
+    const auto maxSamplesPerPixel = loopEnabled
+        ? juce::jmax(1, (filledSamples + juce::jmax(1, filledPixels) - 1) / juce::jmax(1, filledPixels))
+        : juce::jmax(1, numSamples / juce::jmax(1, width));
 
     std::vector<float> derived;
-    derived.resize(static_cast<size_t>(samplesPerPixel));
+    derived.resize(static_cast<size_t>(maxSamplesPerPixel));
 
     for (int x = 0; x < width; ++x)
     {
-        const auto start = x * samplesPerPixel;
-        const auto end = juce::jmin(numSamples, start + samplesPerPixel);
+        if (loopEnabled && (x >= filledPixels || filledPixels <= 0))
+            continue;
+
+        int start = 0;
+        int end = 0;
+
+        if (loopEnabled)
+        {
+            const auto x0 = static_cast<double>(x);
+            const auto x1 = static_cast<double>(x + 1);
+            const auto filledPixelsDouble = static_cast<double>(juce::jmax(1, filledPixels));
+            const auto filledSamplesDouble = static_cast<double>(filledSamples);
+
+            start = cycleStartSample + static_cast<int>(std::floor((x0 / filledPixelsDouble) * filledSamplesDouble));
+            end = cycleStartSample + static_cast<int>(std::floor((x1 / filledPixelsDouble) * filledSamplesDouble));
+            end = juce::jmax(end, start + 1);
+            end = juce::jmin(end, numSamples);
+        }
+        else
+        {
+            const auto samplesPerPixel = juce::jmax(1, numSamples / juce::jmax(1, width));
+            start = x * samplesPerPixel;
+            end = juce::jmin(numSamples, start + samplesPerPixel);
+        }
 
         if (start >= end)
             continue;
@@ -240,6 +283,12 @@ void WaveformView::drawTrack(juce::Graphics& g,
                                        centerY - minimum * halfHeight);
 
         g.drawVerticalLine(bounds.getX() + x, yMax, yMin);
+    }
+
+    if (loopEnabled)
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.18f));
+        g.drawVerticalLine(bounds.getX() + targetPixels, static_cast<float>(bounds.getY() + 2), static_cast<float>(bounds.getBottom() - 2));
     }
 
     g.setColour(juce::Colours::white.withAlpha(0.65f));

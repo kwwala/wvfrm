@@ -16,6 +16,7 @@ static constexpr auto themeIntensity = "theme_intensity";
 static constexpr auto waveGainVisual = "wave_gain_visual";
 static constexpr auto smoothing = "smoothing";
 static constexpr auto uiScale = "ui_scale";
+static constexpr auto waveLoop = "wave_loop";
 }
 
 enum class TimeMode
