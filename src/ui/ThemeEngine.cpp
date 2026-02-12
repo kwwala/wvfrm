@@ -18,25 +18,31 @@ juce::Colour ThemeEngine::colourFor(BandEnergies energies,
         ? blendThreeBand(energies, theme)
         : colourFromPreset(theme);
 
-    auto saturationFloor = 0.35f;
-    auto brightnessFloor = 0.45f;
     auto alphaFloor = (mode == ColorMode::threeBand) ? 0.35f : 0.2f;
     auto ampShaped = std::sqrt(amp);
+    float saturation = 0.0f;
+    float brightness = 0.0f;
 
     if (theme == ThemePreset::minimeters3Band)
     {
-        saturationFloor = 0.6f;
-        brightnessFloor = 0.55f;
+        saturation = juce::jlimit(0.0f, 1.0f, 0.85f + 0.15f * intensity);
+        brightness = juce::jlimit(0.0f, 1.0f, 0.9f + 0.1f * intensity);
         if (mode == ColorMode::threeBand)
             alphaFloor = 0.25f;
         ampShaped = std::pow(amp, 0.65f);
     }
+    else
+    {
+        const auto saturationFloor = 0.35f;
+        const auto brightnessFloor = 0.45f;
+        saturation = juce::jlimit(0.05f, 1.0f, saturationFloor + (1.0f - saturationFloor) * intensity);
+        brightness = juce::jlimit(0.0f, 1.0f, brightnessFloor + (1.0f - brightnessFloor) * intensity);
+    }
 
-    const auto saturation = juce::jlimit(0.05f, 1.0f, saturationFloor + (1.0f - saturationFloor) * intensity);
     const auto alpha = juce::jlimit(0.15f, 1.0f, alphaFloor + (1.0f - alphaFloor) * ampShaped);
 
     base = base.withMultipliedSaturation(saturation)
-               .withMultipliedBrightness(brightnessFloor + (1.0f - brightnessFloor) * intensity)
+               .withMultipliedBrightness(brightness)
                .withAlpha(alpha);
 
     return base;
@@ -64,23 +70,20 @@ juce::Colour ThemeEngine::blendThreeBand(const BandEnergies& energies, ThemePres
 
     if (theme == ThemePreset::minimeters3Band)
     {
-        constexpr auto gamma = 1.7f;
-        constexpr auto energyFloor = 0.03f;
-        auto rEnergy = std::pow(low, gamma) + energyFloor;
-        auto gEnergy = std::pow(mid, gamma) + energyFloor;
-        auto bEnergy = std::pow(high, gamma) + energyFloor;
-        const auto total = rEnergy + gEnergy + bEnergy;
+        auto r = juce::jlimit(0.0f, 1.0f, low);
+        auto g = juce::jlimit(0.0f, 1.0f, mid);
+        auto b = juce::jlimit(0.0f, 1.0f, high);
 
-        if (total > 1.0e-6f)
+        const auto maxComp = juce::jmax(r, juce::jmax(g, b));
+        if (maxComp > 1.0e-6f)
         {
-            rEnergy /= total;
-            gEnergy /= total;
-            bEnergy /= total;
+            constexpr auto targetBrightness = 0.95f;
+            const auto scale = targetBrightness / maxComp;
+            r = juce::jlimit(0.0f, 1.0f, r * scale);
+            g = juce::jlimit(0.0f, 1.0f, g * scale);
+            b = juce::jlimit(0.0f, 1.0f, b * scale);
         }
 
-        const auto r = juce::jlimit(0.0f, 1.0f, static_cast<float>(rEnergy));
-        const auto g = juce::jlimit(0.0f, 1.0f, static_cast<float>(gEnergy));
-        const auto b = juce::jlimit(0.0f, 1.0f, static_cast<float>(bEnergy));
         return juce::Colour::fromFloatRGBA(r, g, b, 1.0f);
     }
 

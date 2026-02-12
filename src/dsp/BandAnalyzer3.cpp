@@ -29,6 +29,7 @@ BandEnergies BandAnalyzer3::analyzeSegment(const float* samples,
     float highEnergy = 0.0f;
 
     const auto smooth = juce::jlimit(0.0f, 1.0f, smoothingAmount);
+    const auto oneMinusSmooth = 1.0f - smooth;
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -41,12 +42,20 @@ BandEnergies BandAnalyzer3::analyzeSegment(const float* samples,
         const auto high = x - hiLpState;
         const auto mid = x - low - high;
 
-        lowEnergy = juce::jmax(std::abs(low), lowEnergy * smooth);
-        midEnergy = juce::jmax(std::abs(mid), midEnergy * smooth);
-        highEnergy = juce::jmax(std::abs(high), highEnergy * smooth);
+        const auto lowSq = low * low;
+        const auto midSq = mid * mid;
+        const auto highSq = high * high;
+
+        lowEnergy = smooth * lowEnergy + oneMinusSmooth * lowSq;
+        midEnergy = smooth * midEnergy + oneMinusSmooth * midSq;
+        highEnergy = smooth * highEnergy + oneMinusSmooth * highSq;
     }
 
-    const auto total = lowEnergy + midEnergy + highEnergy;
+    const auto lowRms = std::sqrt(lowEnergy);
+    const auto midRms = std::sqrt(midEnergy);
+    const auto highRms = std::sqrt(highEnergy);
+
+    const auto total = lowRms + midRms + highRms;
 
     if (total <= 1.0e-9f)
     {
@@ -54,9 +63,9 @@ BandEnergies BandAnalyzer3::analyzeSegment(const float* samples,
         return output;
     }
 
-    output.low = lowEnergy / total;
-    output.mid = midEnergy / total;
-    output.high = highEnergy / total;
+    output.low = lowRms / total;
+    output.mid = midRms / total;
+    output.high = highRms / total;
     return output;
 }
 
