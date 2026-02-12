@@ -1,5 +1,7 @@
 ﻿#include "ThemeEngine.h"
 
+#include <cmath>
+
 namespace wvfrm
 {
 
@@ -16,11 +18,14 @@ juce::Colour ThemeEngine::colourFor(BandEnergies energies,
         ? blendThreeBand(energies, theme)
         : colourFromPreset(theme);
 
-    const auto saturation = juce::jlimit(0.05f, 1.0f, 0.35f + 0.65f * intensity);
+    const auto saturationFloor = (theme == ThemePreset::minimeters3Band) ? 0.55f : 0.35f;
+    const auto brightnessFloor = (theme == ThemePreset::minimeters3Band) ? 0.6f : 0.45f;
+
+    const auto saturation = juce::jlimit(0.05f, 1.0f, saturationFloor + (1.0f - saturationFloor) * intensity);
     const auto alpha = juce::jlimit(0.15f, 1.0f, 0.2f + 0.8f * amp);
 
     base = base.withMultipliedSaturation(saturation)
-               .withMultipliedBrightness(0.45f + 0.55f * intensity)
+               .withMultipliedBrightness(brightnessFloor + (1.0f - brightnessFloor) * intensity)
                .withAlpha(alpha);
 
     return base;
@@ -48,9 +53,22 @@ juce::Colour ThemeEngine::blendThreeBand(const BandEnergies& energies, ThemePres
 
     if (theme == ThemePreset::minimeters3Band)
     {
-        const auto r = juce::jlimit(0, 255, static_cast<int>(255.0f * low));
-        const auto g = juce::jlimit(0, 255, static_cast<int>(255.0f * mid));
-        const auto b = juce::jlimit(0, 255, static_cast<int>(255.0f * high));
+        constexpr auto gamma = 2.35f;
+        auto rEnergy = std::pow(low, gamma);
+        auto gEnergy = std::pow(mid, gamma);
+        auto bEnergy = std::pow(high, gamma);
+        const auto total = rEnergy + gEnergy + bEnergy;
+
+        if (total > 1.0e-6f)
+        {
+            rEnergy /= total;
+            gEnergy /= total;
+            bEnergy /= total;
+        }
+
+        const auto r = juce::jlimit(0, 255, static_cast<int>(255.0f * rEnergy));
+        const auto g = juce::jlimit(0, 255, static_cast<int>(255.0f * gEnergy));
+        const auto b = juce::jlimit(0, 255, static_cast<int>(255.0f * bEnergy));
         return juce::Colour::fromRGB(static_cast<juce::uint8>(r),
                                      static_cast<juce::uint8>(g),
                                      static_cast<juce::uint8>(b));
