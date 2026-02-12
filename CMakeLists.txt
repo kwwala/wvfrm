@@ -46,7 +46,7 @@ target_link_libraries(wvfrm_core
 target_include_directories(wvfrm_core PUBLIC src)
 
 juce_add_plugin(wvfrm
-  COMPANY_NAME "wvfrm"
+  COMPANY_NAME "Kwwala"
   IS_SYNTH FALSE
   NEEDS_MIDI_INPUT FALSE
   NEEDS_MIDI_OUTPUT FALSE
@@ -54,9 +54,9 @@ juce_add_plugin(wvfrm
   EDITOR_WANTS_KEYBOARD_FOCUS FALSE
   COPY_PLUGIN_AFTER_BUILD TRUE
   PLUGIN_MANUFACTURER_CODE WvFm
-  PLUGIN_CODE WvF1
+  PLUGIN_CODE WvF0
   FORMATS VST3
-  PRODUCT_NAME "wvfrm"
+  PRODUCT_NAME "wvfrm."
 )
 
 juce_generate_juce_header(wvfrm)
