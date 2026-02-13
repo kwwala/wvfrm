@@ -41,7 +41,6 @@ private:
 
     void timerCallback() override;
     void ensureRenderBuffers(int width) const;
-    float filterLoopPhase(float rawPhase) noexcept;
 
     void drawTrack(juce::Graphics& g,
                    juce::Rectangle<int> bounds,
@@ -51,8 +50,9 @@ private:
                    ThemePreset themePreset,
                    ColorMode colorMode,
                    float intensity,
-                   bool loopEnabled,
                    float loopPhase,
+                   bool phaseReliable,
+                   bool resetSuggested,
                    float gainLinear,
                    float rmsSmoothing) const;
 
@@ -68,8 +68,6 @@ private:
     mutable std::vector<float> maxPerX;
     mutable std::vector<float> ampPerX;
     mutable std::vector<uint8_t> activePerX;
-    float lastLoopPhase = 0.0f;
-    bool hasLoopPhase = false;
     bool debugOverlayEnabled = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WaveformView)

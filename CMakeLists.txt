@@ -22,6 +22,8 @@ add_library(wvfrm_core STATIC
   src/Parameters.cpp
   src/dsp/AnalysisRingBuffer.h
   src/dsp/AnalysisRingBuffer.cpp
+  src/dsp/LoopClock.h
+  src/dsp/LoopClock.cpp
   src/dsp/TimeWindowResolver.h
   src/dsp/TimeWindowResolver.cpp
   src/dsp/BandAnalyzer3.h
@@ -96,6 +98,8 @@ enable_testing()
 
 add_executable(wvfrm_tests
   tests/main.cpp
+  tests/AnalysisRingBufferTests.cpp
+  tests/LoopClockTests.cpp
   tests/TimeWindowResolverTests.cpp
   tests/BandAnalyzer3Tests.cpp
   tests/ChannelViewsTests.cpp

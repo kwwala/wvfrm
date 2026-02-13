@@ -4,6 +4,7 @@
 
 #include "Parameters.h"
 #include "dsp/AnalysisRingBuffer.h"
+#include "dsp/LoopClock.h"
 #include "dsp/TimeWindowResolver.h"
 
 namespace wvfrm
@@ -12,6 +13,16 @@ namespace wvfrm
 class WaveformAudioProcessor : public juce::AudioProcessor
 {
 public:
+    struct LoopRenderFrame
+    {
+        juce::AudioBuffer<float> samples;
+        float phaseNormalized = 0.0f;
+        bool phaseReliable = false;
+        int64_t frameEndSample = 0;
+        double bpmUsed = 120.0;
+        bool resetSuggested = false;
+    };
+
     WaveformAudioProcessor();
     ~WaveformAudioProcessor() override = default;
 
@@ -46,6 +57,7 @@ public:
     TimeWindowResolver::ResolvedWindow resolveCurrentWindow() const noexcept;
     bool copyRecentSamples(juce::AudioBuffer<float>& destination, int numSamples) const;
     double getLoopPhaseNormalized() const noexcept;
+    bool getLoopRenderFrame(LoopRenderFrame& out, int requestedSamples) const;
 
     double getCurrentSampleRateHz() const noexcept;
     int getAnalysisCapacity() const noexcept;
@@ -64,6 +76,14 @@ private:
     std::atomic<double> hostPpqPosition { 0.0 };
     std::atomic<bool> ppqReliable { false };
     std::atomic<long long> processedSamples { 0 };
+
+    std::atomic<uint64_t> renderClockSeq { 0 };
+    std::atomic<int64_t> lastClockEndSample { 0 };
+    std::atomic<float> lastClockPhase { 0.0f };
+    std::atomic<bool> lastClockReliable { false };
+    std::atomic<double> lastClockBpm { 120.0 };
+    std::atomic<bool> lastClockResetSuggested { false };
+    SyncClockState syncClockState;
 
     std::atomic<int> editorWidth { 960 };
     std::atomic<int> editorHeight { 540 };

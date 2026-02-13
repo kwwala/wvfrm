@@ -41,7 +41,8 @@ void WaveformView::paint(juce::Graphics& g)
                                                juce::jmax(128, processor.getAnalysisCapacity()),
                                                static_cast<int>(std::round(resolved.ms * sampleRate / 1000.0)));
 
-    if (! processor.copyRecentSamples(scratch, requestedSamples))
+    WaveformAudioProcessor::LoopRenderFrame renderFrame;
+    if (! processor.getLoopRenderFrame(renderFrame, requestedSamples))
     {
         g.setColour(juce::Colours::white.withAlpha(0.6f));
         g.setFont(juce::FontOptions(16.0f, juce::Font::plain));
@@ -56,18 +57,9 @@ void WaveformView::paint(juce::Graphics& g)
     const auto themePreset = static_cast<ThemePreset>(getChoiceIndex(state, ParamIDs::themePreset));
     const auto intensity = getFloatValue(state, ParamIDs::themeIntensity, 100.0f);
     const auto smoothing = getFloatValue(state, ParamIDs::smoothing, 35.0f) / 100.0f;
-    // Loop is currently an essential rendering mode and no longer exposed in UI.
-    const auto loopEnabled = true;
-
     const auto gainDb = getFloatValue(state, ParamIDs::waveGainVisual, 0.0f);
     const auto gainLinear = juce::Decibels::decibelsToGain(gainDb);
-
-    const auto rawLoopPhase = static_cast<float>(processor.getLoopPhaseNormalized());
-    const auto loopPhase = loopEnabled ? filterLoopPhase(rawLoopPhase)
-                                       : juce::jlimit(0.0f, 1.0f, rawLoopPhase);
-
-    if (! loopEnabled)
-        hasLoopPhase = false;
+    const auto loopPhase = juce::jlimit(0.0f, 1.0f, renderFrame.phaseNormalized);
 
     auto contentBounds = bounds.reduced(8);
 
@@ -114,14 +106,15 @@ void WaveformView::paint(juce::Graphics& g)
 
         drawTrack(g,
                   trackBounds,
-                  scratch,
+                  renderFrame.samples,
                   tracks[i].mode,
                   tracks[i].label,
                   themePreset,
                   colorMode,
                   intensity,
-                  loopEnabled,
                   loopPhase,
+                  renderFrame.phaseReliable,
+                  renderFrame.resetSuggested,
                   gainLinear,
                   smoothing);
     }
@@ -165,36 +158,6 @@ void WaveformView::ensureRenderBuffers(int width) const
     }
 }
 
-float WaveformView::filterLoopPhase(float rawPhase) noexcept
-{
-    const auto clamped = juce::jlimit(0.0f, 1.0f, rawPhase);
-
-    if (! hasLoopPhase)
-    {
-        hasLoopPhase = true;
-        lastLoopPhase = clamped;
-        return clamped;
-    }
-
-    const auto delta = clamped - lastLoopPhase;
-
-    if (delta < -0.5f)
-    {
-        // A large negative delta is treated as cycle wrap.
-        lastLoopPhase = clamped;
-        return clamped;
-    }
-
-    if (delta < -0.02f)
-    {
-        // Ignore small backward jumps from unstable host phase reporting.
-        return lastLoopPhase;
-    }
-
-    lastLoopPhase = clamped;
-    return clamped;
-}
-
 void WaveformView::drawTrack(juce::Graphics& g,
                              juce::Rectangle<int> bounds,
                              const juce::AudioBuffer<float>& source,
@@ -203,8 +166,9 @@ void WaveformView::drawTrack(juce::Graphics& g,
                              ThemePreset themePreset,
                              ColorMode colorMode,
                              float intensity,
-                             bool loopEnabled,
                              float loopPhase,
+                             bool phaseReliable,
+                             bool resetSuggested,
                              float gainLinear,
                              float smoothing) const
 {
@@ -236,27 +200,14 @@ void WaveformView::drawTrack(juce::Graphics& g,
 
         for (int x = 0; x < width; ++x)
         {
-            int start = 0;
-            int end = 0;
+            // Map the most recent window to a circular write-head to keep a full-width loop.
+            const auto distanceBehind = (writeX - x + width) % width;
+            const auto startDistance = static_cast<double>(distanceBehind + 1);
+            const auto endDistance = static_cast<double>(distanceBehind);
+            const auto widthAsDouble = static_cast<double>(width);
 
-            if (loopEnabled)
-            {
-                // Map the most recent window to a circular write-head to keep a full-width loop.
-                const auto distanceBehind = (writeX - x + width) % width;
-                const auto startDistance = static_cast<double>(distanceBehind + 1);
-                const auto endDistance = static_cast<double>(distanceBehind);
-                const auto widthAsDouble = static_cast<double>(width);
-
-                start = numSamples - static_cast<int>(std::floor((startDistance * static_cast<double>(numSamples)) / widthAsDouble));
-                end = numSamples - static_cast<int>(std::floor((endDistance * static_cast<double>(numSamples)) / widthAsDouble));
-            }
-            else
-            {
-                start = static_cast<int>(std::floor((static_cast<double>(x) * static_cast<double>(numSamples))
-                                                    / static_cast<double>(width)));
-                end = static_cast<int>(std::floor((static_cast<double>(x + 1) * static_cast<double>(numSamples))
-                                                  / static_cast<double>(width)));
-            }
+            auto start = numSamples - static_cast<int>(std::floor((startDistance * static_cast<double>(numSamples)) / widthAsDouble));
+            auto end = numSamples - static_cast<int>(std::floor((endDistance * static_cast<double>(numSamples)) / widthAsDouble));
 
             start = juce::jlimit(0, numSamples - 1, start);
             end = juce::jlimit(1, numSamples, end);
@@ -328,7 +279,9 @@ void WaveformView::drawTrack(juce::Graphics& g,
         }
     }
 
-    const auto blurColors = (themePreset == ThemePreset::minimeters3Band)
+    const auto blurColors = phaseReliable
+        && ! resetSuggested
+        && (themePreset == ThemePreset::minimeters3Band)
         && (colorMode == ColorMode::threeBand);
 
     const int offsets[3] = { -1, 0, 1 };
@@ -352,17 +305,10 @@ void WaveformView::drawTrack(juce::Graphics& g,
             for (int i = 0; i < 3; ++i)
             {
                 auto nx = x + offsets[i];
-                if (loopEnabled)
-                {
-                    if (nx < 0)
-                        nx += width;
-                    else if (nx >= width)
-                        nx -= width;
-                }
-                else if (nx < 0 || nx >= width)
-                {
-                    continue;
-                }
+                if (nx < 0)
+                    nx += width;
+                else if (nx >= width)
+                    nx -= width;
 
                 const auto nIndex = static_cast<size_t>(nx);
                 if (activePerX[nIndex] == 0)
@@ -404,14 +350,11 @@ void WaveformView::drawTrack(juce::Graphics& g,
         g.drawLine(xPos, yMax, xPos, yMin, thickness);
     }
 
-    if (loopEnabled)
-    {
-        const auto cursorX = bounds.getX() + writeX;
-        g.setColour(juce::Colours::white.withAlpha(0.16f));
-        g.drawVerticalLine(cursorX,
-                           static_cast<float>(bounds.getY() + 2),
-                           static_cast<float>(bounds.getBottom() - 2));
-    }
+    const auto cursorX = bounds.getX() + writeX;
+    g.setColour(juce::Colours::white.withAlpha(0.16f));
+    g.drawVerticalLine(cursorX,
+                       static_cast<float>(bounds.getY() + 2),
+                       static_cast<float>(bounds.getBottom() - 2));
 
     g.setColour(juce::Colours::white.withAlpha(0.6f));
     g.setFont(juce::FontOptions(12.0f, juce::Font::plain));

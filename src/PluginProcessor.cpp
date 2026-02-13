@@ -39,6 +39,14 @@ void WaveformAudioProcessor::prepareToPlay(double sampleRate, int)
 {
     currentSampleRate.store(sampleRate);
     processedSamples.store(0);
+    syncClockState = {};
+
+    renderClockSeq.store(0);
+    lastClockEndSample.store(0);
+    lastClockPhase.store(0.0f);
+    lastClockReliable.store(false);
+    lastClockBpm.store(juce::jmax(1.0, lastKnownBpm.load()));
+    lastClockResetSuggested.store(false);
 
     const auto capacity = juce::jlimit(65536, 2 * 1024 * 1024, static_cast<int>(std::ceil(sampleRate * 9.0)));
     analysisBuffer.prepare(2, capacity);
@@ -109,7 +117,57 @@ void WaveformAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         buffer.clear(channel, 0, buffer.getNumSamples());
 
     analysisBuffer.pushBuffer(buffer);
-    processedSamples.fetch_add(buffer.getNumSamples());
+
+    const auto blockSamples = buffer.getNumSamples();
+    const auto blockEndSample = processedSamples.fetch_add(blockSamples) + static_cast<int64_t>(blockSamples);
+
+    const auto mode = getChoiceIndex(parameters, ParamIDs::timeMode);
+    const auto division = getChoiceIndex(parameters, ParamIDs::timeSyncDivision);
+
+    float phaseNormalized = 0.0f;
+    auto phaseReliable = false;
+    auto resetSuggested = false;
+    auto bpmUsed = juce::jmax(1.0, lastKnownBpm.load());
+
+    if (mode == static_cast<int>(TimeMode::sync))
+    {
+        const auto beatsInLoop = juce::jmax(1.0e-9, getDivisionBeats(division));
+        const auto hostBpm = tempoReliable.load() ? hostTempoBpm.load() : lastKnownBpm.load();
+
+        const SyncClockInput input {
+            ppqReliable.load(),
+            hostPpqPosition.load(),
+            hostBpm,
+            blockEndSample,
+            currentSampleRate.load(),
+            beatsInLoop
+        };
+
+        const auto output = updateSyncLoopClock(input, syncClockState, 0.25);
+        phaseNormalized = output.phaseNormalized;
+        phaseReliable = output.phaseReliable;
+        resetSuggested = output.resetSuggested;
+        bpmUsed = hostBpm;
+    }
+    else
+    {
+        const auto resolved = resolveCurrentWindow();
+        const auto intervalSeconds = juce::jmax(1.0e-6, resolved.ms * 0.001);
+        const auto intervalSamples = juce::jmax(1.0, intervalSeconds * currentSampleRate.load());
+        phaseNormalized = static_cast<float>(positiveFraction(static_cast<double>(blockEndSample) / intervalSamples));
+        phaseReliable = true;
+        resetSuggested = false;
+        bpmUsed = resolved.bpmUsed;
+        syncClockState = {};
+    }
+
+    renderClockSeq.fetch_add(1, std::memory_order_acq_rel); // begin write (odd)
+    lastClockEndSample.store(blockEndSample, std::memory_order_relaxed);
+    lastClockPhase.store(juce::jlimit(0.0f, 1.0f, phaseNormalized), std::memory_order_relaxed);
+    lastClockReliable.store(phaseReliable, std::memory_order_relaxed);
+    lastClockBpm.store(bpmUsed, std::memory_order_relaxed);
+    lastClockResetSuggested.store(resetSuggested, std::memory_order_relaxed);
+    renderClockSeq.fetch_add(1, std::memory_order_release); // end write (even)
 }
 
 juce::AudioProcessorEditor* WaveformAudioProcessor::createEditor()
@@ -243,21 +301,50 @@ bool WaveformAudioProcessor::copyRecentSamples(juce::AudioBuffer<float>& destina
 
 double WaveformAudioProcessor::getLoopPhaseNormalized() const noexcept
 {
-    const auto mode = getChoiceIndex(parameters, ParamIDs::timeMode);
-    const auto division = getChoiceIndex(parameters, ParamIDs::timeSyncDivision);
+    return juce::jlimit(0.0, 1.0, static_cast<double>(lastClockPhase.load()));
+}
 
-    if (mode == static_cast<int>(TimeMode::sync) && ppqReliable.load())
+bool WaveformAudioProcessor::getLoopRenderFrame(LoopRenderFrame& out, int requestedSamples) const
+{
+    int64_t endSample = 0;
+    float phase = 0.0f;
+    auto reliable = false;
+    auto resetSuggested = false;
+    auto bpmUsed = 120.0;
+
+    auto snapshotReadOk = false;
+    for (int attempt = 0; attempt < 8; ++attempt)
     {
-        const auto beatsInLoop = juce::jmax(1.0e-9, getDivisionBeats(division));
-        const auto ppq = hostPpqPosition.load();
-        return positiveFraction(ppq / beatsInLoop);
+        const auto seqBegin = renderClockSeq.load(std::memory_order_acquire);
+        if ((seqBegin & 1u) != 0u)
+            continue;
+
+        endSample = lastClockEndSample.load(std::memory_order_relaxed);
+        phase = lastClockPhase.load(std::memory_order_relaxed);
+        reliable = lastClockReliable.load(std::memory_order_relaxed);
+        bpmUsed = lastClockBpm.load(std::memory_order_relaxed);
+        resetSuggested = lastClockResetSuggested.load(std::memory_order_relaxed);
+
+        const auto seqEnd = renderClockSeq.load(std::memory_order_acquire);
+        if (seqBegin == seqEnd)
+        {
+            snapshotReadOk = true;
+            break;
+        }
     }
 
-    const auto resolved = resolveCurrentWindow();
-    const auto intervalSeconds = juce::jmax(1.0e-6, resolved.ms * 0.001);
-    const auto intervalSamples = juce::jmax(1.0, intervalSeconds * currentSampleRate.load());
-    const auto samples = static_cast<double>(processedSamples.load());
-    return positiveFraction(samples / intervalSamples);
+    if (! snapshotReadOk)
+        return false;
+
+    if (! analysisBuffer.copyWindowEndingAt(out.samples, requestedSamples, endSample))
+        return false;
+
+    out.phaseNormalized = juce::jlimit(0.0f, 1.0f, phase);
+    out.phaseReliable = reliable;
+    out.frameEndSample = endSample;
+    out.bpmUsed = bpmUsed;
+    out.resetSuggested = resetSuggested;
+    return true;
 }
 
 double WaveformAudioProcessor::getCurrentSampleRateHz() const noexcept
