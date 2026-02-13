@@ -31,6 +31,11 @@ add_library(wvfrm_core STATIC
   src/ui/ThemeEngine.cpp
 )
 
+juce_add_binary_data(wvfrm_assets
+  SOURCES
+    assets/fonts/DM_Sans/static/DMSans-Regular.ttf
+)
+
 target_link_libraries(wvfrm_core
   PUBLIC
     juce::juce_core
@@ -51,7 +56,7 @@ juce_add_plugin(wvfrm
   NEEDS_MIDI_INPUT FALSE
   NEEDS_MIDI_OUTPUT FALSE
   IS_MIDI_EFFECT FALSE
-  EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+  EDITOR_WANTS_KEYBOARD_FOCUS TRUE
   COPY_PLUGIN_AFTER_BUILD TRUE
   PLUGIN_MANUFACTURER_CODE WvFm
   PLUGIN_CODE WvF0
@@ -74,6 +79,7 @@ target_sources(wvfrm
 target_link_libraries(wvfrm
   PRIVATE
     wvfrm_core
+    wvfrm_assets
     juce::juce_audio_utils
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
