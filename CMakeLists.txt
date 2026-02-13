@@ -61,7 +61,7 @@ juce_add_plugin(wvfrm
   PLUGIN_MANUFACTURER_CODE WvFm
   PLUGIN_CODE WvF0
   FORMATS VST3
-  PRODUCT_NAME "wvfrm."
+  PRODUCT_NAME "wvfrm"
 )
 
 juce_generate_juce_header(wvfrm)

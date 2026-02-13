@@ -8,8 +8,13 @@ namespace
 {
 juce::Typeface::Ptr loadDmSansTypeface()
 {
-    return juce::Typeface::createSystemTypefaceFor(BinaryData::DMSans_Regular_ttf,
-                                                   BinaryData::DMSans_Regular_ttfSize);
+    return juce::Typeface::createSystemTypefaceFor(BinaryData::DMSansRegular_ttf,
+                                                   BinaryData::DMSansRegular_ttfSize);
+}
+
+juce::Font makeTypefaceFont(const juce::Typeface::Ptr& typeface, float height)
+{
+    return juce::Font(juce::FontOptions(typeface).withHeight(height));
 }
 
 class MinimalLookAndFeel : public juce::LookAndFeel_V4
@@ -25,22 +30,22 @@ public:
 
     juce::Font getLabelFont(juce::Label&) override
     {
-        return juce::Font(typeface).withHeight(12.5f);
+        return makeTypefaceFont(typeface, 12.5f);
     }
 
     juce::Font getComboBoxFont(juce::ComboBox&) override
     {
-        return juce::Font(typeface).withHeight(12.5f);
+        return makeTypefaceFont(typeface, 12.5f);
     }
 
     juce::Font getPopupMenuFont() override
     {
-        return juce::Font(typeface).withHeight(12.0f);
+        return makeTypefaceFont(typeface, 12.0f);
     }
 
     juce::Font getSliderPopupFont(juce::Slider&) override
     {
-        return juce::Font(typeface).withHeight(12.0f);
+        return makeTypefaceFont(typeface, 12.0f);
     }
 
     void drawComboBox(juce::Graphics& g,
@@ -53,7 +58,7 @@ public:
                       int,
                       juce::ComboBox& box) override
     {
-        const auto bounds = juce::Rectangle<int>(0, 0, width, height).toFloat();
+        auto bounds = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
         g.setColour(box.findColour(juce::ComboBox::backgroundColourId));
         g.fillRoundedRectangle(bounds, 6.0f);
 
@@ -126,7 +131,7 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     titleLabel.setText("wvfrm.", juce::dontSendNotification);
     titleLabel.setJustificationType(juce::Justification::centredLeft);
     titleLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.9f));
-    titleLabel.setFont(juce::Font(typeface).withHeight(15.0f));
+    titleLabel.setFont(makeTypefaceFont(typeface, 15.0f));
     addAndMakeVisible(titleLabel);
 
     configureLabel(timeModeLabel, "Time Mode");
