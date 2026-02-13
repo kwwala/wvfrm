@@ -1,4 +1,4 @@
-﻿#include "WaveformView.h"
+#include "WaveformView.h"
 
 #include "../PluginProcessor.h"
 #include "../dsp/ChannelViews.h"
@@ -13,12 +13,8 @@ namespace wvfrm
 
 namespace
 {
-constexpr float globalBandAlpha = 0.15f;
-constexpr float globalMix = 0.35f;
-constexpr float rmsSmoothing = 0.7f;
-constexpr float lineFatAlpha = 0.35f;
-constexpr float lineFatThickness = 2.6f;
-constexpr float lineMainThickness = 1.8f;
+constexpr float minimetersLineThickness = 1.15f;
+constexpr float defaultLineThickness = 1.35f;
 }
 
 WaveformView::WaveformView(WaveformAudioProcessor& processorToUse)
@@ -59,11 +55,19 @@ void WaveformView::paint(juce::Graphics& g)
     const auto colorMode = static_cast<ColorMode>(getChoiceIndex(state, ParamIDs::colorMode));
     const auto themePreset = static_cast<ThemePreset>(getChoiceIndex(state, ParamIDs::themePreset));
     const auto intensity = getFloatValue(state, ParamIDs::themeIntensity, 100.0f);
+    const auto smoothing = getFloatValue(state, ParamIDs::smoothing, 35.0f) / 100.0f;
+    // Loop is currently an essential rendering mode and no longer exposed in UI.
+    const auto loopEnabled = true;
 
     const auto gainDb = getFloatValue(state, ParamIDs::waveGainVisual, 0.0f);
     const auto gainLinear = juce::Decibels::decibelsToGain(gainDb);
 
-    const auto loopPhase = static_cast<float>(processor.getLoopPhaseNormalized());
+    const auto rawLoopPhase = static_cast<float>(processor.getLoopPhaseNormalized());
+    const auto loopPhase = loopEnabled ? filterLoopPhase(rawLoopPhase)
+                                       : juce::jlimit(0.0f, 1.0f, rawLoopPhase);
+
+    if (! loopEnabled)
+        hasLoopPhase = false;
 
     auto contentBounds = bounds.reduced(8);
 
@@ -99,13 +103,6 @@ void WaveformView::paint(juce::Graphics& g)
     if (tracks.empty())
         return;
 
-    const auto width = contentBounds.getWidth();
-    ensureLoopCaches(tracks.size(), width);
-    updateLoopState(width, loopPhase);
-
-    if (loopState.resetCaches)
-        clearLoopCaches();
-
     const auto trackHeight = contentBounds.getHeight() / static_cast<int>(tracks.size());
 
     for (size_t i = 0; i < tracks.size(); ++i)
@@ -123,9 +120,10 @@ void WaveformView::paint(juce::Graphics& g)
                   themePreset,
                   colorMode,
                   intensity,
+                  loopEnabled,
+                  loopPhase,
                   gainLinear,
-                  rmsSmoothing,
-                  loopCaches[i]);
+                  smoothing);
     }
 
     if (debugOverlayEnabled)
@@ -145,118 +143,56 @@ void WaveformView::paint(juce::Graphics& g)
         auto overlay = bounds.reduced(12);
         g.drawText(text, overlay.removeFromTop(16), juce::Justification::centredLeft);
     }
-
-    lastLoopPhase = juce::jlimit(0.0f, 1.0f, loopPhase);
-    hasLoopPhase = true;
 }
 
 void WaveformView::timerCallback()
 {
-    repaint();
+    if (isShowing() && isVisible())
+        repaint();
 }
 
-void WaveformView::ensureLoopCaches(size_t trackCount, int width) const
+void WaveformView::ensureRenderBuffers(int width) const
 {
-    const auto trackCountInt = static_cast<int>(trackCount);
-    if (width <= 0)
-        return;
+    const auto requiredSize = static_cast<size_t>(juce::jmax(1, width));
 
-    const auto sizeChanged = (trackCountInt != lastTrackCount) || (width != lastWidth);
-
-    if (sizeChanged)
+    if (energiesPerX.size() != requiredSize)
     {
-        loopCaches.clear();
-        loopCaches.resize(trackCount);
-        lastTrackCount = trackCountInt;
-        lastWidth = width;
-        hasLoopPhase = false;
-    }
-
-    for (auto& cache : loopCaches)
-    {
-        if (sizeChanged || cache.energies.size() != static_cast<size_t>(width))
-        {
-            cache.energies.assign(static_cast<size_t>(width), {});
-            cache.mixed.assign(static_cast<size_t>(width), {});
-            cache.min.assign(static_cast<size_t>(width), 0.0f);
-            cache.max.assign(static_cast<size_t>(width), 0.0f);
-            cache.amp.assign(static_cast<size_t>(width), 0.0f);
-            cache.active.assign(static_cast<size_t>(width), 0);
-            cache.globalBands = {};
-            cache.globalValid = false;
-        }
+        energiesPerX.assign(requiredSize, {});
+        minPerX.assign(requiredSize, 0.0f);
+        maxPerX.assign(requiredSize, 0.0f);
+        ampPerX.assign(requiredSize, 0.0f);
+        activePerX.assign(requiredSize, static_cast<uint8_t>(0));
     }
 }
 
-void WaveformView::clearLoopCaches() const
+float WaveformView::filterLoopPhase(float rawPhase) noexcept
 {
-    for (auto& cache : loopCaches)
+    const auto clamped = juce::jlimit(0.0f, 1.0f, rawPhase);
+
+    if (! hasLoopPhase)
     {
-        std::fill(cache.active.begin(), cache.active.end(), 0);
-        cache.globalBands = {};
-        cache.globalValid = false;
-    }
-}
-
-void WaveformView::updateLoopState(int width, float loopPhase) const
-{
-    loopState = {};
-    if (width <= 0)
-        return;
-
-    const auto clampedLoopPhase = juce::jlimit(0.0f, 1.0f, loopPhase);
-
-    loopState.width = width;
-    loopState.writeX = juce::jlimit(0, width - 1, static_cast<int>(std::floor(clampedLoopPhase * static_cast<float>(width))));
-
-    const auto gapGuess = juce::jmax(6, static_cast<int>(std::round(static_cast<float>(width) * 0.02f)));
-    const auto maxGap = juce::jmax(1, width - 1);
-    loopState.gapPixels = juce::jmin(gapGuess, maxGap);
-
-    const auto fadeGuess = juce::jmax(3, loopState.gapPixels / 2);
-    const auto maxFade = juce::jmax(1, width - 1 - loopState.gapPixels);
-    loopState.fadePixels = juce::jmin(fadeGuess, maxFade);
-
-    int prevX = loopState.writeX;
-
-    if (hasLoopPhase)
-    {
-        prevX = juce::jlimit(0, width - 1, static_cast<int>(std::floor(lastLoopPhase * static_cast<float>(width))));
-        const auto delta = clampedLoopPhase - lastLoopPhase;
-        const auto wrap = delta < 0.0f && (lastLoopPhase - clampedLoopPhase) > 0.5f;
-        const auto backward = delta < 0.0f && ! wrap;
-        const auto jump = ! wrap && std::abs(delta) > 0.35f;
-
-        if (jump)
-        {
-            loopState.resetCaches = true;
-            loopState.rangeCount = 1;
-            loopState.ranges[0] = { loopState.writeX, loopState.writeX };
-            return;
-        }
-
-        if (wrap)
-        {
-            loopState.rangeCount = 2;
-            loopState.ranges[0] = { prevX, width - 1 };
-            loopState.ranges[1] = { 0, loopState.writeX };
-            return;
-        }
-
-        if (backward || prevX > loopState.writeX)
-        {
-            loopState.rangeCount = 1;
-            loopState.ranges[0] = { loopState.writeX, loopState.writeX };
-            return;
-        }
-
-        loopState.rangeCount = 1;
-        loopState.ranges[0] = { prevX, loopState.writeX };
-        return;
+        hasLoopPhase = true;
+        lastLoopPhase = clamped;
+        return clamped;
     }
 
-    loopState.rangeCount = 1;
-    loopState.ranges[0] = { loopState.writeX, loopState.writeX };
+    const auto delta = clamped - lastLoopPhase;
+
+    if (delta < -0.5f)
+    {
+        // A large negative delta is treated as cycle wrap.
+        lastLoopPhase = clamped;
+        return clamped;
+    }
+
+    if (delta < -0.02f)
+    {
+        // Ignore small backward jumps from unstable host phase reporting.
+        return lastLoopPhase;
+    }
+
+    lastLoopPhase = clamped;
+    return clamped;
 }
 
 void WaveformView::drawTrack(juce::Graphics& g,
@@ -267,9 +203,10 @@ void WaveformView::drawTrack(juce::Graphics& g,
                              ThemePreset themePreset,
                              ColorMode colorMode,
                              float intensity,
+                             bool loopEnabled,
+                             float loopPhase,
                              float gainLinear,
-                             float smoothing,
-                             LoopCache& cache) const
+                             float smoothing) const
 {
     const auto width = juce::jmax(1, bounds.getWidth());
     const auto numSamples = source.getNumSamples();
@@ -277,27 +214,53 @@ void WaveformView::drawTrack(juce::Graphics& g,
     if (numSamples <= 0)
         return;
 
-    g.setColour(juce::Colour::fromRGB(255, 255, 255).withAlpha(0.03f));
+    g.setColour(juce::Colour::fromRGB(255, 255, 255).withAlpha(0.05f));
     g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 5.0f, 1.0f);
 
     const auto centerY = static_cast<float>(bounds.getCentreY());
-    const auto halfHeight = static_cast<float>(bounds.getHeight()) * 0.5f;
+    const auto halfHeight = static_cast<float>(bounds.getHeight()) * 0.46f;
 
-    g.setColour(juce::Colours::white.withAlpha(0.04f));
+    g.setColour(juce::Colours::white.withAlpha(0.08f));
     g.drawHorizontalLine(bounds.getCentreY(), static_cast<float>(bounds.getX()), static_cast<float>(bounds.getRight()));
 
-    const auto samplesPerPixel = juce::jmax(1, numSamples / juce::jmax(1, width));
-    std::vector<float> derived(static_cast<size_t>(samplesPerPixel));
+    ensureRenderBuffers(width);
+    std::fill(activePerX.begin(), activePerX.end(), static_cast<uint8_t>(0));
 
-    for (int r = 0; r < loopState.rangeCount; ++r)
+    const auto clampedLoopPhase = juce::jlimit(0.0f, 1.0f, loopPhase);
+    const auto writeX = juce::jlimit(0, width - 1, static_cast<int>(std::floor(clampedLoopPhase * static_cast<float>(width))));
+
+    if (width > 0 && numSamples > 0)
     {
-        const auto rangeStart = juce::jlimit(0, width - 1, loopState.ranges[r].start);
-        const auto rangeEnd = juce::jlimit(0, width - 1, loopState.ranges[r].end);
+        const auto maxSamplesPerPixel = juce::jmax(1, (numSamples + width - 1) / juce::jmax(1, width));
+        std::vector<float> derived(static_cast<size_t>(maxSamplesPerPixel));
 
-        for (int x = rangeStart; x <= rangeEnd; ++x)
+        for (int x = 0; x < width; ++x)
         {
-            const auto start = x * samplesPerPixel;
-            const auto end = juce::jmin(numSamples, start + samplesPerPixel);
+            int start = 0;
+            int end = 0;
+
+            if (loopEnabled)
+            {
+                // Map the most recent window to a circular write-head to keep a full-width loop.
+                const auto distanceBehind = (writeX - x + width) % width;
+                const auto startDistance = static_cast<double>(distanceBehind + 1);
+                const auto endDistance = static_cast<double>(distanceBehind);
+                const auto widthAsDouble = static_cast<double>(width);
+
+                start = numSamples - static_cast<int>(std::floor((startDistance * static_cast<double>(numSamples)) / widthAsDouble));
+                end = numSamples - static_cast<int>(std::floor((endDistance * static_cast<double>(numSamples)) / widthAsDouble));
+            }
+            else
+            {
+                start = static_cast<int>(std::floor((static_cast<double>(x) * static_cast<double>(numSamples))
+                                                    / static_cast<double>(width)));
+                end = static_cast<int>(std::floor((static_cast<double>(x + 1) * static_cast<double>(numSamples))
+                                                  / static_cast<double>(width)));
+            }
+
+            start = juce::jlimit(0, numSamples - 1, start);
+            end = juce::jlimit(1, numSamples, end);
+            end = juce::jmax(end, start + 1);
 
             if (start >= end)
                 continue;
@@ -347,103 +310,37 @@ void WaveformView::drawTrack(juce::Graphics& g,
             minimum *= gainLinear;
             maximum *= gainLinear;
 
-            const auto amplitudeNorm = juce::jlimit(0.0f, 1.0f, (std::abs(maximum) + std::abs(minimum)) * 0.5f);
+            const auto amplitudeNorm = juce::jlimit(0.0f,
+                                                    1.0f,
+                                                    juce::jmax(std::abs(maximum), std::abs(minimum)));
+
             const auto energies = bandAnalyzer.analyzeSegment(segmentData,
                                                               segmentLength,
                                                               processor.getCurrentSampleRateHz(),
                                                               smoothing);
 
             const auto index = static_cast<size_t>(x);
-            cache.min[index] = minimum;
-            cache.max[index] = maximum;
-            cache.amp[index] = amplitudeNorm;
-            cache.energies[index] = energies;
-            cache.active[index] = 1;
+            minPerX[index] = minimum;
+            maxPerX[index] = maximum;
+            ampPerX[index] = amplitudeNorm;
+            energiesPerX[index] = energies;
+            activePerX[index] = static_cast<uint8_t>(1);
         }
     }
 
-    const auto gapStart = (loopState.writeX + 1) % width;
-    for (int i = 0; i < loopState.gapPixels; ++i)
-    {
-        const auto x = (gapStart + i) % width;
-        cache.active[static_cast<size_t>(x)] = 0;
-    }
+    const auto blurColors = (themePreset == ThemePreset::minimeters3Band)
+        && (colorMode == ColorMode::threeBand);
 
-    BandEnergies frameBands {};
-    int activeCount = 0;
+    const int offsets[3] = { -1, 0, 1 };
+    const float weights[3] = { 1.0f, 2.0f, 1.0f };
 
     for (int x = 0; x < width; ++x)
     {
         const auto index = static_cast<size_t>(x);
-        if (cache.active[index] == 0)
+        if (activePerX[index] == 0)
             continue;
 
-        frameBands.low += cache.energies[index].low;
-        frameBands.mid += cache.energies[index].mid;
-        frameBands.high += cache.energies[index].high;
-        ++activeCount;
-    }
-
-    if (activeCount > 0)
-    {
-        const auto invCount = 1.0f / static_cast<float>(activeCount);
-        frameBands.low *= invCount;
-        frameBands.mid *= invCount;
-        frameBands.high *= invCount;
-
-        if (! cache.globalValid)
-        {
-            cache.globalBands = frameBands;
-            cache.globalValid = true;
-        }
-        else
-        {
-            cache.globalBands.low += globalBandAlpha * (frameBands.low - cache.globalBands.low);
-            cache.globalBands.mid += globalBandAlpha * (frameBands.mid - cache.globalBands.mid);
-            cache.globalBands.high += globalBandAlpha * (frameBands.high - cache.globalBands.high);
-        }
-    }
-
-    for (int x = 0; x < width; ++x)
-    {
-        const auto index = static_cast<size_t>(x);
-        if (cache.active[index] == 0)
-            continue;
-
-        auto energies = cache.energies[index];
-        energies.low += (cache.globalBands.low - energies.low) * globalMix;
-        energies.mid += (cache.globalBands.mid - energies.mid) * globalMix;
-        energies.high += (cache.globalBands.high - energies.high) * globalMix;
-        cache.mixed[index] = energies;
-    }
-
-    const auto blurColors = (colorMode == ColorMode::threeBand);
-    const int offsets[5] = { -2, -1, 0, 1, 2 };
-    const float weights[5] = { 1.0f, 2.0f, 4.0f, 2.0f, 1.0f };
-
-    for (int x = 0; x < width; ++x)
-    {
-        const auto index = static_cast<size_t>(x);
-        if (cache.active[index] == 0)
-            continue;
-
-        int ahead = x - gapStart;
-        if (ahead < 0)
-            ahead += width;
-
-        if (ahead < loopState.gapPixels)
-            continue;
-
-        float fade = 1.0f;
-        if (ahead < loopState.gapPixels + loopState.fadePixels)
-        {
-            const auto fadeOffset = ahead - loopState.gapPixels;
-            fade = loopState.fadePixels > 0
-                ? static_cast<float>(fadeOffset) / static_cast<float>(loopState.fadePixels)
-                : 1.0f;
-        }
-
-        BandEnergies energies = cache.mixed[index];
+        BandEnergies energies = energiesPerX[index];
 
         if (blurColors)
         {
@@ -452,27 +349,30 @@ void WaveformView::drawTrack(juce::Graphics& g,
             float midSum = 0.0f;
             float highSum = 0.0f;
 
-            for (int i = 0; i < 5; ++i)
+            for (int i = 0; i < 3; ++i)
             {
-                const auto nx = x + offsets[i];
-                if (nx < 0 || nx >= width)
+                auto nx = x + offsets[i];
+                if (loopEnabled)
+                {
+                    if (nx < 0)
+                        nx += width;
+                    else if (nx >= width)
+                        nx -= width;
+                }
+                else if (nx < 0 || nx >= width)
+                {
                     continue;
+                }
 
                 const auto nIndex = static_cast<size_t>(nx);
-                if (cache.active[nIndex] == 0)
-                    continue;
-
-                int aheadNeighbor = nx - gapStart;
-                if (aheadNeighbor < 0)
-                    aheadNeighbor += width;
-                if (aheadNeighbor < loopState.gapPixels)
+                if (activePerX[nIndex] == 0)
                     continue;
 
                 const auto w = weights[i];
                 weightSum += w;
-                lowSum += cache.mixed[nIndex].low * w;
-                midSum += cache.mixed[nIndex].mid * w;
-                highSum += cache.mixed[nIndex].high * w;
+                lowSum += energiesPerX[nIndex].low * w;
+                midSum += energiesPerX[nIndex].mid * w;
+                highSum += energiesPerX[nIndex].high * w;
             }
 
             if (weightSum > 0.0f)
@@ -483,35 +383,37 @@ void WaveformView::drawTrack(juce::Graphics& g,
             }
         }
 
-        const auto amplitudeNorm = cache.amp[index];
         auto colour = themeEngine.colourFor(energies,
                                             themePreset,
                                             colorMode,
                                             intensity,
-                                            amplitudeNorm);
-
-        const auto baseAlpha = colour.getFloatAlpha();
-        if (fade < 1.0f)
-            colour = colour.withAlpha(baseAlpha * fade);
+                                            ampPerX[index]);
 
         const auto yMax = juce::jlimit(static_cast<float>(bounds.getY()),
                                        static_cast<float>(bounds.getBottom()),
-                                       centerY - cache.max[index] * halfHeight);
+                                       centerY - maxPerX[index] * halfHeight);
 
         const auto yMin = juce::jlimit(static_cast<float>(bounds.getY()),
                                        static_cast<float>(bounds.getBottom()),
-                                       centerY - cache.min[index] * halfHeight);
+                                       centerY - minPerX[index] * halfHeight);
 
         const auto xPos = static_cast<float>(bounds.getX() + x) + 0.5f;
-
-        g.setColour(colour.withAlpha(colour.getFloatAlpha() * lineFatAlpha));
-        g.drawLine(xPos, yMax, xPos, yMin, lineFatThickness);
+        const auto thickness = blurColors ? minimetersLineThickness : defaultLineThickness;
 
         g.setColour(colour);
-        g.drawLine(xPos, yMax, xPos, yMin, lineMainThickness);
+        g.drawLine(xPos, yMax, xPos, yMin, thickness);
     }
 
-    g.setColour(juce::Colours::white.withAlpha(0.45f));
+    if (loopEnabled)
+    {
+        const auto cursorX = bounds.getX() + writeX;
+        g.setColour(juce::Colours::white.withAlpha(0.16f));
+        g.drawVerticalLine(cursorX,
+                           static_cast<float>(bounds.getY() + 2),
+                           static_cast<float>(bounds.getBottom() - 2));
+    }
+
+    g.setColour(juce::Colours::white.withAlpha(0.6f));
     g.setFont(juce::FontOptions(12.0f, juce::Font::plain));
     g.drawText(label, bounds.reduced(8), juce::Justification::topLeft);
 }

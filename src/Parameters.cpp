@@ -16,7 +16,7 @@ constexpr auto defaultThemeIntensity = 100.0f;
 constexpr auto defaultWaveGain = 0.0f;
 constexpr auto defaultSmoothing = 35.0f;
 constexpr auto defaultUiScale = 100.0f;
-constexpr auto defaultWaveLoop = false;
+constexpr auto defaultWaveLoop = true;
 }
 
 juce::StringArray getTimeModeChoices()

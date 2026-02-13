@@ -25,11 +25,11 @@ juce::Colour ThemeEngine::colourFor(BandEnergies energies,
 
     if (theme == ThemePreset::minimeters3Band)
     {
-        saturation = juce::jlimit(0.0f, 1.0f, 0.85f + 0.15f * intensity);
-        brightness = juce::jlimit(0.0f, 1.0f, 0.9f + 0.1f * intensity);
+        saturation = juce::jlimit(0.0f, 1.0f, 0.82f + 0.18f * intensity);
+        brightness = juce::jlimit(0.0f, 1.0f, 0.88f + 0.12f * intensity);
         if (mode == ColorMode::threeBand)
-            alphaFloor = 0.25f;
-        ampShaped = std::pow(amp, 0.65f);
+            alphaFloor = 0.2f;
+        ampShaped = std::pow(amp, 0.75f);
     }
     else
     {
@@ -70,21 +70,8 @@ juce::Colour ThemeEngine::blendThreeBand(const BandEnergies& energies, ThemePres
 
     if (theme == ThemePreset::minimeters3Band)
     {
-        auto r = juce::jlimit(0.0f, 1.0f, low);
-        auto g = juce::jlimit(0.0f, 1.0f, mid);
-        auto b = juce::jlimit(0.0f, 1.0f, high);
-
-        const auto maxComp = juce::jmax(r, juce::jmax(g, b));
-        if (maxComp > 1.0e-6f)
-        {
-            constexpr auto targetBrightness = 0.95f;
-            const auto scale = targetBrightness / maxComp;
-            r = juce::jlimit(0.0f, 1.0f, r * scale);
-            g = juce::jlimit(0.0f, 1.0f, g * scale);
-            b = juce::jlimit(0.0f, 1.0f, b * scale);
-        }
-
-        return juce::Colour::fromFloatRGBA(r, g, b, 1.0f);
+        // Preserve the true low/mid/high proportion for a MiniMeters-like read.
+        return juce::Colour::fromFloatRGBA(low, mid, high, 1.0f);
     }
 
     if (theme == ThemePreset::rekordboxInspired)
