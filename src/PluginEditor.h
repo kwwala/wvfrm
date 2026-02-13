@@ -40,12 +40,14 @@ private:
     juce::ComboBox themePresetBox;
 
     juce::Slider timeMsSlider;
+    juce::Slider colorMatchSlider;
     juce::Label timeModeLabel;
     juce::Label timeDivisionLabel;
     juce::Label timeMsLabel;
     juce::Label channelViewLabel;
     juce::Label colorModeLabel;
     juce::Label themePresetLabel;
+    juce::Label colorMatchLabel;
 
     WaveformView waveformView;
 
@@ -56,6 +58,7 @@ private:
     std::unique_ptr<ComboAttachment> themePresetAttachment;
 
     std::unique_ptr<SliderAttachment> timeMsAttachment;
+    std::unique_ptr<SliderAttachment> colorMatchAttachment;
     bool debugOverlayEnabled = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WaveformAudioProcessorEditor)

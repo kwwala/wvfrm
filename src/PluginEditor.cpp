@@ -140,6 +140,7 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     configureLabel(channelViewLabel, "Channel");
     configureLabel(colorModeLabel, "Color");
     configureLabel(themePresetLabel, "Theme");
+    configureLabel(colorMatchLabel, "Color Match");
 
     addAndMakeVisible(timeModeLabel);
     addAndMakeVisible(timeDivisionLabel);
@@ -147,6 +148,7 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     addAndMakeVisible(channelViewLabel);
     addAndMakeVisible(colorModeLabel);
     addAndMakeVisible(themePresetLabel);
+    addAndMakeVisible(colorMatchLabel);
 
     configureCombo(timeModeBox, getTimeModeChoices());
     configureCombo(timeDivisionBox, getTimeDivisionChoices());
@@ -161,7 +163,9 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     addAndMakeVisible(themePresetBox);
 
     configureKnob(timeMsSlider, " ms");
+    configureKnob(colorMatchSlider, " %");
     addAndMakeVisible(timeMsSlider);
+    addAndMakeVisible(colorMatchSlider);
 
     addAndMakeVisible(waveformView);
 
@@ -172,6 +176,7 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     themePresetAttachment = std::make_unique<ComboAttachment>(state, ParamIDs::themePreset, themePresetBox);
 
     timeMsAttachment = std::make_unique<SliderAttachment>(state, ParamIDs::timeMs, timeMsSlider);
+    colorMatchAttachment = std::make_unique<SliderAttachment>(state, ParamIDs::colorMatch, colorMatchSlider);
 
     timeModeBox.onChange = [this] { updateTimeControls(); };
 
@@ -207,7 +212,7 @@ void WaveformAudioProcessorEditor::resized()
     bounds.removeFromTop(8);
 
     auto controls = bounds.removeFromTop(66);
-    const auto cellWidth = controls.getWidth() / 6;
+    const auto cellWidth = controls.getWidth() / 7;
     const auto labelHeight = 18;
 
     auto row1 = controls.removeFromTop(labelHeight);
@@ -217,6 +222,7 @@ void WaveformAudioProcessorEditor::resized()
     channelViewLabel.setBounds(row1.removeFromLeft(cellWidth));
     colorModeLabel.setBounds(row1.removeFromLeft(cellWidth));
     themePresetLabel.setBounds(row1.removeFromLeft(cellWidth));
+    colorMatchLabel.setBounds(row1.removeFromLeft(cellWidth));
 
     auto row2 = controls.removeFromTop(30);
     timeModeBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
@@ -225,6 +231,7 @@ void WaveformAudioProcessorEditor::resized()
     channelViewBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
     colorModeBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
     themePresetBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
+    colorMatchSlider.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
 
     bounds.removeFromTop(8);
     waveformView.setBounds(bounds);
@@ -245,7 +252,7 @@ void WaveformAudioProcessorEditor::configureCombo(juce::ComboBox& box, const juc
 void WaveformAudioProcessorEditor::configureKnob(juce::Slider& slider, const juce::String& suffix)
 {
     slider.setSliderStyle(juce::Slider::LinearHorizontal);
-    slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 80, 20);
+    slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 20);
     slider.setTextValueSuffix(suffix);
     slider.setColour(juce::Slider::backgroundColourId, juce::Colour::fromRGB(14, 16, 22));
     slider.setColour(juce::Slider::trackColourId, juce::Colour::fromRGB(96, 135, 180));

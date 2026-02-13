@@ -17,6 +17,7 @@ constexpr auto defaultWaveGain = 0.0f;
 constexpr auto defaultSmoothing = 35.0f;
 constexpr auto defaultUiScale = 100.0f;
 constexpr auto defaultWaveLoop = true;
+constexpr auto defaultColorMatch = 100.0f;
 }
 
 juce::StringArray getTimeModeChoices()
@@ -112,6 +113,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         ParamIDs::waveLoop,
         "Wave Loop",
         defaultWaveLoop));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        ParamIDs::colorMatch,
+        "Color Match",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 0.01f),
+        defaultColorMatch));
 
     return { params.begin(), params.end() };
 }

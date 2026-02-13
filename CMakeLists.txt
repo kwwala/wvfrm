@@ -60,8 +60,8 @@ juce_add_plugin(wvfrm
   IS_MIDI_EFFECT FALSE
   EDITOR_WANTS_KEYBOARD_FOCUS TRUE
   COPY_PLUGIN_AFTER_BUILD TRUE
-  PLUGIN_MANUFACTURER_CODE WvFm
-  PLUGIN_CODE WvF0
+  PLUGIN_MANUFACTURER_CODE WvF1
+  PLUGIN_CODE WvF1
   FORMATS VST3
   PRODUCT_NAME "wvfrm"
 )
@@ -103,6 +103,8 @@ add_executable(wvfrm_tests
   tests/TimeWindowResolverTests.cpp
   tests/BandAnalyzer3Tests.cpp
   tests/ChannelViewsTests.cpp
+  tests/ParametersTests.cpp
+  tests/ThemeEngineTests.cpp
 )
 
 target_link_libraries(wvfrm_tests

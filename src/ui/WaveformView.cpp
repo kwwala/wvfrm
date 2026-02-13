@@ -15,6 +15,8 @@ namespace
 {
 constexpr float minimetersLineThickness = 1.15f;
 constexpr float defaultLineThickness = 1.35f;
+constexpr float minGlowExtraThickness = 0.3f;
+constexpr float maxGlowExtraThickness = 2.6f;
 constexpr double colourAnalysisWindowSeconds = 0.012;
 constexpr float wrapGateAmplitudeThreshold = 0.08f;
 constexpr float wrapGateDeltaThreshold = 0.35f;
@@ -60,6 +62,7 @@ void WaveformView::paint(juce::Graphics& g)
     const auto themePreset = static_cast<ThemePreset>(getChoiceIndex(state, ParamIDs::themePreset));
     const auto intensity = getFloatValue(state, ParamIDs::themeIntensity, 100.0f);
     const auto smoothing = getFloatValue(state, ParamIDs::smoothing, 35.0f) / 100.0f;
+    const auto colorMatch = getFloatValue(state, ParamIDs::colorMatch, 100.0f) / 100.0f;
     const auto gainDb = getFloatValue(state, ParamIDs::waveGainVisual, 0.0f);
     const auto gainLinear = juce::Decibels::decibelsToGain(gainDb);
     const auto loopPhase = juce::jlimit(0.0f, 1.0f, renderFrame.phaseNormalized);
@@ -158,6 +161,7 @@ void WaveformView::paint(juce::Graphics& g)
                   themePreset,
                   colorMode,
                   intensity,
+                  colorMatch,
                   loopPhase,
                   renderFrame.phaseReliable,
                   renderFrame.resetSuggested,
@@ -223,6 +227,7 @@ void WaveformView::drawTrack(juce::Graphics& g,
                              ThemePreset themePreset,
                              ColorMode colorMode,
                              float intensity,
+                             float colorMatch,
                              float loopPhase,
                              bool phaseReliable,
                              bool resetSuggested,
@@ -283,13 +288,10 @@ void WaveformView::drawTrack(juce::Graphics& g,
             float minimum = std::numeric_limits<float>::max();
             float maximum = -std::numeric_limits<float>::max();
 
-            const float* segmentData = nullptr;
             const auto segmentLength = end - start;
 
             if (mode == RenderMode::left)
             {
-                segmentData = source.getReadPointer(0, start);
-
                 for (int s = start; s < end; ++s)
                 {
                     const auto value = source.getSample(0, s);
@@ -300,7 +302,6 @@ void WaveformView::drawTrack(juce::Graphics& g,
             else if (mode == RenderMode::right)
             {
                 const auto rightChannel = source.getNumChannels() > 1 ? 1 : 0;
-                segmentData = source.getReadPointer(rightChannel, start);
 
                 for (int s = start; s < end; ++s)
                 {
@@ -318,8 +319,6 @@ void WaveformView::drawTrack(juce::Graphics& g,
                     minimum = juce::jmin(minimum, sample);
                     maximum = juce::jmax(maximum, sample);
                 }
-
-                segmentData = derived.data();
             }
 
             minimum *= gainLinear;
@@ -367,11 +366,13 @@ void WaveformView::drawTrack(juce::Graphics& g,
 
     const auto blurColors = phaseReliable
         && ! resetSuggested
-        && (themePreset == ThemePreset::minimeters3Band)
-        && (colorMode == ColorMode::threeBand);
+        && (colorMode == ColorMode::threeBand)
+        && (colorMatch > 0.0f);
 
-    const int offsets[3] = { -1, 0, 1 };
-    const float weights[3] = { 1.0f, 2.0f, 1.0f };
+    const int lowOffsets[3] = { -1, 0, 1 };
+    const float lowWeights[3] = { 1.0f, 2.0f, 1.0f };
+    const int wideOffsets[5] = { -2, -1, 0, 1, 2 };
+    const float wideWeights[5] = { 1.0f, 2.0f, 3.0f, 2.0f, 1.0f };
     const auto applyTemporalSmoothing = colorMode == ColorMode::threeBand
         && trackIndex >= 0
         && trackIndex < static_cast<int>(temporalEnergiesByTrack.size())
@@ -379,8 +380,10 @@ void WaveformView::drawTrack(juce::Graphics& g,
         && temporalEnergiesByTrack[static_cast<size_t>(trackIndex)].size() == static_cast<size_t>(width)
         && temporalInitByTrack[static_cast<size_t>(trackIndex)].size() == static_cast<size_t>(width);
 
-    const auto attackMs = juce::jmap(smoothing, 0.0f, 1.0f, 18.0f, 60.0f);
-    const auto releaseMs = juce::jmap(smoothing, 0.0f, 1.0f, 120.0f, 360.0f);
+    const auto baseAttackMs = juce::jmap(smoothing, 0.0f, 1.0f, 18.0f, 60.0f);
+    const auto baseReleaseMs = juce::jmap(smoothing, 0.0f, 1.0f, 120.0f, 360.0f);
+    const auto attackMs = baseAttackMs + juce::jmap(colorMatch, 0.0f, 1.0f, 0.0f, 42.0f);
+    const auto releaseMs = baseReleaseMs + juce::jmap(colorMatch, 0.0f, 1.0f, 0.0f, 220.0f);
     const auto attackTauSeconds = juce::jmax(1.0e-4, static_cast<double>(attackMs) * 0.001);
     const auto releaseTauSeconds = juce::jmax(1.0e-4, static_cast<double>(releaseMs) * 0.001);
     auto* temporalTrack = applyTemporalSmoothing ? &temporalEnergiesByTrack[static_cast<size_t>(trackIndex)] : nullptr;
@@ -404,12 +407,18 @@ void WaveformView::drawTrack(juce::Graphics& g,
 
         if (blurColors)
         {
+            const auto useWideKernel = colorMatch >= 0.55f;
+            const auto* offsets = useWideKernel ? wideOffsets : lowOffsets;
+            const auto* weights = useWideKernel ? wideWeights : lowWeights;
+            const auto kernelSize = useWideKernel ? 5 : 3;
+            const auto blurMix = juce::jmap(colorMatch, 0.0f, 1.0f, 0.2f, 1.0f);
+
             float weightSum = 0.0f;
             float lowSum = 0.0f;
             float midSum = 0.0f;
             float highSum = 0.0f;
 
-            for (int i = 0; i < 3; ++i)
+            for (int i = 0; i < kernelSize; ++i)
             {
                 auto nx = x + offsets[i];
                 if (nx < 0)
@@ -447,9 +456,21 @@ void WaveformView::drawTrack(juce::Graphics& g,
 
             if (weightSum > 0.0f)
             {
-                energies.low = lowSum / weightSum;
-                energies.mid = midSum / weightSum;
-                energies.high = highSum / weightSum;
+                const auto blurredLow = lowSum / weightSum;
+                const auto blurredMid = midSum / weightSum;
+                const auto blurredHigh = highSum / weightSum;
+
+                energies.low = juce::jmap(blurMix, energies.low, blurredLow);
+                energies.mid = juce::jmap(blurMix, energies.mid, blurredMid);
+                energies.high = juce::jmap(blurMix, energies.high, blurredHigh);
+
+                const auto sum = energies.low + energies.mid + energies.high;
+                if (sum > 1.0e-6f)
+                {
+                    energies.low /= sum;
+                    energies.mid /= sum;
+                    energies.high /= sum;
+                }
             }
         }
 
@@ -489,7 +510,8 @@ void WaveformView::drawTrack(juce::Graphics& g,
                                             themePreset,
                                             colorMode,
                                             intensity,
-                                            ampPerX[index]);
+                                            ampPerX[index],
+                                            colorMatch * 100.0f);
 
         const auto yMax = juce::jlimit(static_cast<float>(bounds.getY()),
                                        static_cast<float>(bounds.getBottom()),
@@ -500,10 +522,25 @@ void WaveformView::drawTrack(juce::Graphics& g,
                                        centerY - minPerX[index] * halfHeight);
 
         const auto xPos = static_cast<float>(bounds.getX() + x) + 0.5f;
-        const auto thickness = blurColors ? minimetersLineThickness : defaultLineThickness;
+        const auto coreThickness = colorMode == ColorMode::threeBand
+            ? juce::jmap(colorMatch, defaultLineThickness, minimetersLineThickness)
+            : defaultLineThickness;
+
+        if (colorMode == ColorMode::threeBand && colorMatch > 0.0f)
+        {
+            const auto glowAlpha = colour.getFloatAlpha() * juce::jmap(colorMatch, 0.0f, 1.0f, 0.10f, 0.42f);
+            const auto glowColour = colour.withAlpha(glowAlpha);
+            const auto glowThickness = coreThickness + juce::jmap(colorMatch,
+                                                                  0.0f,
+                                                                  1.0f,
+                                                                  minGlowExtraThickness,
+                                                                  maxGlowExtraThickness);
+            g.setColour(glowColour);
+            g.drawLine(xPos, yMax, xPos, yMin, glowThickness);
+        }
 
         g.setColour(colour);
-        g.drawLine(xPos, yMax, xPos, yMin, thickness);
+        g.drawLine(xPos, yMax, xPos, yMin, coreThickness);
     }
 
     const auto cursorX = bounds.getX() + writeX;

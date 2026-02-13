@@ -5,38 +5,69 @@
 namespace wvfrm
 {
 
+namespace
+{
+float lerpFloat(float from, float to, float amount) noexcept
+{
+    return from + (to - from) * amount;
+}
+
+BandEnergies normalizeEnergies(BandEnergies energies) noexcept
+{
+    energies.low = juce::jlimit(0.0f, 1.0f, energies.low);
+    energies.mid = juce::jlimit(0.0f, 1.0f, energies.mid);
+    energies.high = juce::jlimit(0.0f, 1.0f, energies.high);
+
+    const auto sum = energies.low + energies.mid + energies.high;
+    if (sum > 1.0e-6f)
+    {
+        energies.low /= sum;
+        energies.mid /= sum;
+        energies.high /= sum;
+    }
+
+    return energies;
+}
+}
+
 juce::Colour ThemeEngine::colourFor(BandEnergies energies,
                                     ThemePreset theme,
                                     ColorMode mode,
                                     float intensityPercent,
-                                    float amplitudeNorm) const noexcept
+                                    float amplitudeNorm,
+                                    float colorMatchPercent) const noexcept
 {
     const auto intensity = juce::jlimit(0.0f, 1.0f, intensityPercent / 100.0f);
     const auto amp = juce::jlimit(0.0f, 1.0f, amplitudeNorm);
+    const auto colorMatch = juce::jlimit(0.0f, 1.0f, colorMatchPercent / 100.0f);
+    const auto effectiveMatch = 0.72f * std::pow(colorMatch, 0.9f);
 
     if (mode == ColorMode::threeBand)
     {
         // Increase chroma by emphasizing dominant bands before color blend.
-        const auto vibrancePower = theme == ThemePreset::minimeters3Band
+        const auto legacyVibrancePower = theme == ThemePreset::minimeters3Band
             ? juce::jmap(intensity, 0.0f, 1.0f, 1.12f, 1.38f)
             : juce::jmap(intensity, 0.0f, 1.0f, 1.06f, 1.24f);
+        const auto warmVibrancePower = juce::jmap(intensity, 0.0f, 1.0f, 1.16f, 1.44f);
+        const auto vibrancePower = lerpFloat(legacyVibrancePower, warmVibrancePower, colorMatch);
 
         energies.low = std::pow(juce::jlimit(0.0f, 1.0f, energies.low), vibrancePower);
         energies.mid = std::pow(juce::jlimit(0.0f, 1.0f, energies.mid), vibrancePower);
         energies.high = std::pow(juce::jlimit(0.0f, 1.0f, energies.high), vibrancePower);
 
-        const auto sum = energies.low + energies.mid + energies.high;
-        if (sum > 1.0e-6f)
-        {
-            energies.low /= sum;
-            energies.mid /= sum;
-            energies.high /= sum;
-        }
+        energies = normalizeEnergies(energies);
+
+        // Pull some weight from mids to lows/highs to preserve warm multicolor separation.
+        energies.low *= 1.18f;
+        energies.mid *= 0.88f;
+        energies.high *= 1.26f;
+        energies = normalizeEnergies(energies);
     }
 
-    juce::Colour base = (mode == ColorMode::threeBand)
+    const auto legacyBase = (mode == ColorMode::threeBand)
         ? blendThreeBand(energies, theme)
         : colourFromPreset(theme);
+    juce::Colour base = legacyBase;
 
     auto alphaFloor = (mode == ColorMode::threeBand) ? 0.35f : 0.2f;
     auto ampShaped = std::sqrt(amp);
@@ -65,6 +96,34 @@ juce::Colour ThemeEngine::colourFor(BandEnergies energies,
             saturation = juce::jlimit(0.05f, 1.0f, saturationFloor + (1.0f - saturationFloor) * intensity);
             brightness = juce::jlimit(0.0f, 1.0f, brightnessFloor + (1.0f - brightnessFloor) * intensity);
         }
+    }
+
+    if (mode == ColorMode::threeBand)
+    {
+        const auto canonicalLegacyBase = blendThreeBand(energies, ThemePreset::minimeters3Band);
+        const auto convergedLegacyBase = legacyBase.interpolatedWith(canonicalLegacyBase, colorMatch);
+        const auto warmBase = blendMiniMetersWarm(energies);
+        base = convergedLegacyBase.interpolatedWith(warmBase, effectiveMatch);
+
+        const auto canonicalSaturation = juce::jlimit(0.0f, 1.45f, 1.02f + 0.36f * intensity);
+        const auto canonicalBrightness = juce::jlimit(0.0f, 1.0f, 0.82f + 0.14f * intensity);
+        const auto canonicalAlphaFloor = 0.2f;
+        const auto canonicalAmpShaped = std::pow(amp, 0.75f);
+
+        const auto warmSaturation = juce::jlimit(0.2f, 1.48f, 1.12f + 0.36f * intensity);
+        const auto warmBrightness = juce::jlimit(0.3f, 1.0f, 0.84f + 0.13f * intensity);
+        const auto warmAlphaFloor = 0.18f;
+        const auto warmAmpShaped = std::pow(amp, 0.78f);
+
+        saturation = lerpFloat(saturation, canonicalSaturation, colorMatch);
+        brightness = lerpFloat(brightness, canonicalBrightness, colorMatch);
+        alphaFloor = lerpFloat(alphaFloor, canonicalAlphaFloor, colorMatch);
+        ampShaped = lerpFloat(ampShaped, canonicalAmpShaped, colorMatch);
+
+        saturation = lerpFloat(saturation, warmSaturation, effectiveMatch);
+        brightness = lerpFloat(brightness, warmBrightness, effectiveMatch);
+        alphaFloor = lerpFloat(alphaFloor, warmAlphaFloor, effectiveMatch);
+        ampShaped = lerpFloat(ampShaped, warmAmpShaped, effectiveMatch);
     }
 
     const auto alpha = juce::jlimit(0.15f, 1.0f, alphaFloor + (1.0f - alphaFloor) * ampShaped);
@@ -124,6 +183,52 @@ juce::Colour ThemeEngine::blendThreeBand(const BandEnergies& energies, ThemePres
     return juce::Colour::fromRGB(static_cast<juce::uint8>(iceR),
                                  static_cast<juce::uint8>(iceG),
                                  static_cast<juce::uint8>(iceB));
+}
+
+juce::Colour ThemeEngine::blendMiniMetersWarm(const BandEnergies& energies) noexcept
+{
+    auto weighted = normalizeEnergies(energies);
+    auto low = weighted.low;
+    auto mid = weighted.mid;
+    auto high = weighted.high;
+
+    if (low + mid + high <= 1.0e-6f)
+    {
+        low = 0.5f;
+        mid = 0.4f;
+        high = 0.1f;
+    }
+
+    // Keep highs visibly cyan/blue when they are strong in the source.
+    if (high > 0.34f)
+    {
+        high *= 1.1f;
+        const auto accentSum = low + mid + high;
+        if (accentSum > 1.0e-6f)
+        {
+            low /= accentSum;
+            mid /= accentSum;
+            high /= accentSum;
+        }
+    }
+
+    constexpr auto lowR = 1.00f;
+    constexpr auto lowG = 0.22f;
+    constexpr auto lowB = 0.05f;
+
+    constexpr auto midR = 1.00f;
+    constexpr auto midG = 0.32f;
+    constexpr auto midB = 0.72f;
+
+    constexpr auto highR = 0.20f;
+    constexpr auto highG = 0.78f;
+    constexpr auto highB = 1.00f;
+
+    const auto r = juce::jlimit(0.0f, 1.0f, low * lowR + mid * midR + high * highR);
+    const auto g = juce::jlimit(0.0f, 1.0f, low * lowG + mid * midG + high * highG);
+    const auto b = juce::jlimit(0.0f, 1.0f, low * lowB + mid * midB + high * highB);
+
+    return juce::Colour::fromFloatRGBA(r, g, b, 1.0f);
 }
 
 } // namespace wvfrm

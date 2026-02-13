@@ -51,6 +51,7 @@ private:
                    ThemePreset themePreset,
                    ColorMode colorMode,
                    float intensity,
+                   float colorMatch,
                    float loopPhase,
                    bool phaseReliable,
                    bool resetSuggested,

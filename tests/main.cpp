@@ -6,6 +6,8 @@ bool runBandAnalyzerTests();
 bool runChannelViewsTests();
 bool runAnalysisRingBufferTests();
 bool runLoopClockTests();
+bool runParametersTests();
+bool runThemeEngineTests();
 
 int main()
 {
@@ -14,8 +16,10 @@ int main()
     const auto timeOk = runTimeWindowResolverTests();
     const auto bandOk = runBandAnalyzerTests();
     const auto channelOk = runChannelViewsTests();
+    const auto parametersOk = runParametersTests();
+    const auto themeEngineOk = runThemeEngineTests();
 
-    if (ringOk && clockOk && timeOk && bandOk && channelOk)
+    if (ringOk && clockOk && timeOk && bandOk && channelOk && parametersOk && themeEngineOk)
     {
         std::cout << "All tests passed." << std::endl;
         return EXIT_SUCCESS;

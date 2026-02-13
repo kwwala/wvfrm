@@ -17,6 +17,7 @@ static constexpr auto waveGainVisual = "wave_gain_visual";
 static constexpr auto smoothing = "smoothing";
 static constexpr auto uiScale = "ui_scale";
 static constexpr auto waveLoop = "wave_loop";
+static constexpr auto colorMatch = "color_match";
 }
 
 enum class TimeMode
