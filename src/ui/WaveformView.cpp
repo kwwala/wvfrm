@@ -15,7 +15,9 @@ namespace
 {
 constexpr float minimetersLineThickness = 1.15f;
 constexpr float defaultLineThickness = 1.35f;
-constexpr double colourAnalysisWindowSeconds = 0.05;
+constexpr double colourAnalysisWindowSeconds = 0.012;
+constexpr float wrapGateAmplitudeThreshold = 0.08f;
+constexpr float wrapGateDeltaThreshold = 0.35f;
 }
 
 WaveformView::WaveformView(WaveformAudioProcessor& processorToUse)
@@ -271,10 +273,9 @@ void WaveformView::drawTrack(juce::Graphics& g,
                                                     1.0f,
                                                     juce::jmax(std::abs(maximum), std::abs(minimum)));
 
-            const auto center = (start + end) / 2;
-            auto colourStart = center - (colourWindowSamples / 2);
-            colourStart = juce::jlimit(0, juce::jmax(0, numSamples - colourWindowSamples), colourStart);
-            const auto colourLength = juce::jmax(1, juce::jmin(colourWindowSamples, numSamples - colourStart));
+            const auto colourEnd = juce::jlimit(1, numSamples, end);
+            const auto colourStart = juce::jmax(0, colourEnd - colourWindowSamples);
+            const auto colourLength = juce::jmax(1, colourEnd - colourStart);
 
             const float* colourData = nullptr;
             if (mode == RenderMode::left)
@@ -342,6 +343,23 @@ void WaveformView::drawTrack(juce::Graphics& g,
                 const auto nIndex = static_cast<size_t>(nx);
                 if (activePerX[nIndex] == 0)
                     continue;
+
+                const auto wrappedNeighbour = (x == 0 && nx == width - 1)
+                    || (x == width - 1 && nx == 0);
+
+                if (wrappedNeighbour)
+                {
+                    const auto ampA = ampPerX[index];
+                    const auto ampB = ampPerX[nIndex];
+                    const auto maxAmp = juce::jmax(ampA, ampB);
+
+                    const auto delta = std::abs(energiesPerX[index].low - energiesPerX[nIndex].low)
+                        + std::abs(energiesPerX[index].mid - energiesPerX[nIndex].mid)
+                        + std::abs(energiesPerX[index].high - energiesPerX[nIndex].high);
+
+                    if (maxAmp >= wrapGateAmplitudeThreshold && delta > wrapGateDeltaThreshold)
+                        continue;
+                }
 
                 const auto w = weights[i];
                 weightSum += w;
