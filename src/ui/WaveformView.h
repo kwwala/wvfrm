@@ -21,6 +21,7 @@ public:
     ~WaveformView() override = default;
 
     void paint(juce::Graphics& g) override;
+    void setDebugOverlayEnabled(bool enabled) noexcept;
 
 private:
     enum class RenderMode
@@ -38,7 +39,39 @@ private:
         juce::String label;
     };
 
+    struct LoopWriteRange
+    {
+        int start = 0;
+        int end = 0;
+    };
+
+    struct LoopRenderState
+    {
+        int width = 0;
+        int writeX = 0;
+        int gapPixels = 0;
+        int fadePixels = 0;
+        int rangeCount = 0;
+        LoopWriteRange ranges[2];
+        bool resetCaches = false;
+    };
+
+    struct LoopCache
+    {
+        std::vector<BandEnergies> energies;
+        std::vector<BandEnergies> mixed;
+        std::vector<float> min;
+        std::vector<float> max;
+        std::vector<float> amp;
+        std::vector<uint8_t> active;
+        BandEnergies globalBands;
+        bool globalValid = false;
+    };
+
     void timerCallback() override;
+    void ensureLoopCaches(size_t trackCount, int width) const;
+    void clearLoopCaches() const;
+    void updateLoopState(int width, float loopPhase) const;
 
     void drawTrack(juce::Graphics& g,
                    juce::Rectangle<int> bounds,
@@ -48,10 +81,9 @@ private:
                    ThemePreset themePreset,
                    ColorMode colorMode,
                    float intensity,
-                   bool loopEnabled,
-                   float loopPhase,
                    float gainLinear,
-                   float smoothing) const;
+                   float rmsSmoothing,
+                   LoopCache& cache) const;
 
     float sampleForMode(RenderMode mode, const juce::AudioBuffer<float>& source, int sampleIndex) const noexcept;
 
@@ -60,11 +92,13 @@ private:
     ThemeEngine themeEngine;
 
     mutable juce::AudioBuffer<float> scratch;
-    mutable std::vector<BandEnergies> energiesPerX;
-    mutable std::vector<float> minPerX;
-    mutable std::vector<float> maxPerX;
-    mutable std::vector<float> ampPerX;
-    mutable std::vector<uint8_t> activePerX;
+    mutable std::vector<LoopCache> loopCaches;
+    mutable LoopRenderState loopState;
+    mutable float lastLoopPhase = 0.0f;
+    mutable bool hasLoopPhase = false;
+    mutable int lastWidth = 0;
+    mutable int lastTrackCount = 0;
+    bool debugOverlayEnabled = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WaveformView)
 };

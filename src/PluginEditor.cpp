@@ -1,15 +1,114 @@
 ﻿#include "PluginEditor.h"
+#include "BinaryData.h"
 
 namespace wvfrm
 {
 
 namespace
 {
+juce::Typeface::Ptr loadDmSansTypeface()
+{
+    return juce::Typeface::createSystemTypefaceFor(BinaryData::DMSans_Regular_ttf,
+                                                   BinaryData::DMSans_Regular_ttfSize);
+}
+
+class MinimalLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    explicit MinimalLookAndFeel(juce::Typeface::Ptr typefaceIn)
+        : typeface(typefaceIn)
+    {
+        setColour(juce::PopupMenu::backgroundColourId, juce::Colour::fromRGB(10, 12, 16));
+        setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour::fromRGB(22, 28, 36));
+        setColour(juce::PopupMenu::textColourId, juce::Colours::white.withAlpha(0.85f));
+    }
+
+    juce::Font getLabelFont(juce::Label&) override
+    {
+        return juce::Font(typeface).withHeight(12.5f);
+    }
+
+    juce::Font getComboBoxFont(juce::ComboBox&) override
+    {
+        return juce::Font(typeface).withHeight(12.5f);
+    }
+
+    juce::Font getPopupMenuFont() override
+    {
+        return juce::Font(typeface).withHeight(12.0f);
+    }
+
+    juce::Font getSliderPopupFont(juce::Slider&) override
+    {
+        return juce::Font(typeface).withHeight(12.0f);
+    }
+
+    void drawComboBox(juce::Graphics& g,
+                      int width,
+                      int height,
+                      bool,
+                      int,
+                      int,
+                      int,
+                      int,
+                      juce::ComboBox& box) override
+    {
+        const auto bounds = juce::Rectangle<int>(0, 0, width, height).toFloat();
+        g.setColour(box.findColour(juce::ComboBox::backgroundColourId));
+        g.fillRoundedRectangle(bounds, 6.0f);
+
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
+
+        const auto arrowArea = bounds.removeFromRight(20.0f).reduced(6.0f);
+        juce::Path arrow;
+        arrow.addTriangle(arrowArea.getX(),
+                          arrowArea.getCentreY() - 2.0f,
+                          arrowArea.getRight(),
+                          arrowArea.getCentreY() - 2.0f,
+                          arrowArea.getCentreX(),
+                          arrowArea.getCentreY() + 3.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.6f));
+        g.fillPath(arrow);
+    }
+
+    void drawLinearSlider(juce::Graphics& g,
+                          int x,
+                          int y,
+                          int width,
+                          int height,
+                          float sliderPos,
+                          float,
+                          float,
+                          const juce::Slider::SliderStyle,
+                          juce::Slider& slider) override
+    {
+        const auto track = juce::Rectangle<float>(static_cast<float>(x),
+                                                  static_cast<float>(y + height / 2 - 2),
+                                                  static_cast<float>(width),
+                                                  4.0f);
+
+        g.setColour(slider.findColour(juce::Slider::backgroundColourId));
+        g.fillRoundedRectangle(track, 2.0f);
+
+        g.setColour(slider.findColour(juce::Slider::trackColourId));
+        g.fillRoundedRectangle(track.withWidth(sliderPos - static_cast<float>(x)), 2.0f);
+
+        const auto thumbX = sliderPos - 4.0f;
+        const auto thumb = juce::Rectangle<float>(thumbX, track.getCentreY() - 6.0f, 8.0f, 12.0f);
+        g.setColour(slider.findColour(juce::Slider::thumbColourId));
+        g.fillRoundedRectangle(thumb, 3.0f);
+    }
+
+private:
+    juce::Typeface::Ptr typeface;
+};
+
 void configureLabel(juce::Label& label, const juce::String& text)
 {
     label.setText(text, juce::dontSendNotification);
     label.setJustificationType(juce::Justification::centredLeft);
-    label.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.85f));
+    label.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.7f));
 }
 }
 
@@ -19,14 +118,16 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
       state(processor.getValueTreeState()),
       waveformView(processor)
 {
-    titleLabel.setText("wvfrm - waveform visualizer", juce::dontSendNotification);
-    titleLabel.setJustificationType(juce::Justification::centredLeft);
-    titleLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(titleLabel);
+    auto typeface = loadDmSansTypeface();
+    lookAndFeel = std::make_unique<MinimalLookAndFeel>(typeface);
+    setLookAndFeel(lookAndFeel.get());
+    waveformView.setLookAndFeel(lookAndFeel.get());
 
-    tempoLabel.setJustificationType(juce::Justification::centredRight);
-    tempoLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.8f));
-    addAndMakeVisible(tempoLabel);
+    titleLabel.setText("wvfrm.", juce::dontSendNotification);
+    titleLabel.setJustificationType(juce::Justification::centredLeft);
+    titleLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.9f));
+    titleLabel.setFont(juce::Font(typeface).withHeight(15.0f));
+    addAndMakeVisible(titleLabel);
 
     configureLabel(timeModeLabel, "Time Mode");
     configureLabel(timeDivisionLabel, "Sync Div");
@@ -34,10 +135,6 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     configureLabel(channelViewLabel, "Channel");
     configureLabel(colorModeLabel, "Color");
     configureLabel(themePresetLabel, "Theme");
-    configureLabel(themeIntensityLabel, "Intensity");
-    configureLabel(waveGainLabel, "Gain dB");
-    configureLabel(smoothingLabel, "Smoothing");
-    configureLabel(loopLabel, "Loop");
 
     addAndMakeVisible(timeModeLabel);
     addAndMakeVisible(timeDivisionLabel);
@@ -45,10 +142,6 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     addAndMakeVisible(channelViewLabel);
     addAndMakeVisible(colorModeLabel);
     addAndMakeVisible(themePresetLabel);
-    addAndMakeVisible(themeIntensityLabel);
-    addAndMakeVisible(waveGainLabel);
-    addAndMakeVisible(smoothingLabel);
-    addAndMakeVisible(loopLabel);
 
     configureCombo(timeModeBox, getTimeModeChoices());
     configureCombo(timeDivisionBox, getTimeDivisionChoices());
@@ -63,18 +156,7 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     addAndMakeVisible(themePresetBox);
 
     configureKnob(timeMsSlider, " ms");
-    configureKnob(themeIntensitySlider, " %");
-    configureKnob(waveGainSlider, " dB");
-    configureKnob(smoothingSlider, " %");
-
     addAndMakeVisible(timeMsSlider);
-    addAndMakeVisible(themeIntensitySlider);
-    addAndMakeVisible(waveGainSlider);
-    addAndMakeVisible(smoothingSlider);
-
-    loopButton.setButtonText("Enable");
-    loopButton.setColour(juce::ToggleButton::textColourId, juce::Colours::white.withAlpha(0.9f));
-    addAndMakeVisible(loopButton);
 
     addAndMakeVisible(waveformView);
 
@@ -85,71 +167,59 @@ WaveformAudioProcessorEditor::WaveformAudioProcessorEditor(WaveformAudioProcesso
     themePresetAttachment = std::make_unique<ComboAttachment>(state, ParamIDs::themePreset, themePresetBox);
 
     timeMsAttachment = std::make_unique<SliderAttachment>(state, ParamIDs::timeMs, timeMsSlider);
-    themeIntensityAttachment = std::make_unique<SliderAttachment>(state, ParamIDs::themeIntensity, themeIntensitySlider);
-    waveGainAttachment = std::make_unique<SliderAttachment>(state, ParamIDs::waveGainVisual, waveGainSlider);
-    smoothingAttachment = std::make_unique<SliderAttachment>(state, ParamIDs::smoothing, smoothingSlider);
-    loopAttachment = std::make_unique<ButtonAttachment>(state, ParamIDs::waveLoop, loopButton);
 
     timeModeBox.onChange = [this] { updateTimeControls(); };
 
     setResizable(true, true);
-    setResizeLimits(720, 420, 2048, 1400);
+    setResizeLimits(640, 360, 2048, 1400);
 
     const auto bounds = processor.getLastEditorBounds();
-    setSize(juce::jmax(720, bounds.getWidth()), juce::jmax(420, bounds.getHeight()));
+    setSize(juce::jmax(640, bounds.getWidth()), juce::jmax(360, bounds.getHeight()));
 
     updateTimeControls();
-    startTimerHz(8);
+    setWantsKeyboardFocus(true);
+    grabKeyboardFocus();
+}
+
+WaveformAudioProcessorEditor::~WaveformAudioProcessorEditor()
+{
+    waveformView.setLookAndFeel(nullptr);
+    setLookAndFeel(nullptr);
 }
 
 void WaveformAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour::fromRGB(6, 8, 12));
+    g.fillAll(juce::Colour::fromRGB(5, 6, 8));
 }
 
 void WaveformAudioProcessorEditor::resized()
 {
-    auto bounds = getLocalBounds().reduced(12);
+    auto bounds = getLocalBounds().reduced(14);
 
-    auto header = bounds.removeFromTop(26);
-    titleLabel.setBounds(header.removeFromLeft(320));
-    tempoLabel.setBounds(header);
+    auto header = bounds.removeFromTop(24);
+    titleLabel.setBounds(header.removeFromLeft(200));
 
     bounds.removeFromTop(8);
 
-    auto controls = bounds.removeFromTop(140);
-    const auto cellWidth = controls.getWidth() / 5;
-    const auto rowHeight = 28;
+    auto controls = bounds.removeFromTop(66);
+    const auto cellWidth = controls.getWidth() / 6;
+    const auto labelHeight = 18;
 
-    auto row1 = controls.removeFromTop(rowHeight);
+    auto row1 = controls.removeFromTop(labelHeight);
     timeModeLabel.setBounds(row1.removeFromLeft(cellWidth));
     timeDivisionLabel.setBounds(row1.removeFromLeft(cellWidth));
     timeMsLabel.setBounds(row1.removeFromLeft(cellWidth));
     channelViewLabel.setBounds(row1.removeFromLeft(cellWidth));
     colorModeLabel.setBounds(row1.removeFromLeft(cellWidth));
+    themePresetLabel.setBounds(row1.removeFromLeft(cellWidth));
 
     auto row2 = controls.removeFromTop(30);
-    timeModeBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2));
-    timeDivisionBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2));
-    timeMsSlider.setBounds(row2.removeFromLeft(cellWidth).reduced(2));
-    channelViewBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2));
-    colorModeBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2));
-
-    controls.removeFromTop(8);
-
-    auto row3 = controls.removeFromTop(rowHeight);
-    themePresetLabel.setBounds(row3.removeFromLeft(cellWidth));
-    themeIntensityLabel.setBounds(row3.removeFromLeft(cellWidth));
-    waveGainLabel.setBounds(row3.removeFromLeft(cellWidth));
-    smoothingLabel.setBounds(row3.removeFromLeft(cellWidth));
-    loopLabel.setBounds(row3.removeFromLeft(cellWidth));
-
-    auto row4 = controls.removeFromTop(30);
-    themePresetBox.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
-    themeIntensitySlider.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
-    waveGainSlider.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
-    smoothingSlider.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
-    loopButton.setBounds(row4.removeFromLeft(cellWidth).reduced(2));
+    timeModeBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
+    timeDivisionBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
+    timeMsSlider.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
+    channelViewBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
+    colorModeBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
+    themePresetBox.setBounds(row2.removeFromLeft(cellWidth).reduced(2, 0));
 
     bounds.removeFromTop(8);
     waveformView.setBounds(bounds);
@@ -159,8 +229,9 @@ void WaveformAudioProcessorEditor::resized()
 
 void WaveformAudioProcessorEditor::configureCombo(juce::ComboBox& box, const juce::StringArray& choices)
 {
-    box.setColour(juce::ComboBox::backgroundColourId, juce::Colour::fromRGB(18, 22, 30));
-    box.setColour(juce::ComboBox::textColourId, juce::Colours::white.withAlpha(0.9f));
+    box.setColour(juce::ComboBox::backgroundColourId, juce::Colour::fromRGB(12, 14, 20));
+    box.setColour(juce::ComboBox::textColourId, juce::Colours::white.withAlpha(0.85f));
+    box.setColour(juce::ComboBox::arrowColourId, juce::Colours::white.withAlpha(0.6f));
 
     for (int i = 0; i < choices.size(); ++i)
         box.addItem(choices[i], i + 1);
@@ -171,9 +242,9 @@ void WaveformAudioProcessorEditor::configureKnob(juce::Slider& slider, const juc
     slider.setSliderStyle(juce::Slider::LinearHorizontal);
     slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 80, 20);
     slider.setTextValueSuffix(suffix);
-    slider.setColour(juce::Slider::backgroundColourId, juce::Colour::fromRGB(20, 24, 34));
-    slider.setColour(juce::Slider::trackColourId, juce::Colour::fromRGB(70, 165, 240));
-    slider.setColour(juce::Slider::thumbColourId, juce::Colour::fromRGB(230, 240, 250));
+    slider.setColour(juce::Slider::backgroundColourId, juce::Colour::fromRGB(14, 16, 22));
+    slider.setColour(juce::Slider::trackColourId, juce::Colour::fromRGB(96, 135, 180));
+    slider.setColour(juce::Slider::thumbColourId, juce::Colour::fromRGB(215, 225, 235));
 }
 
 void WaveformAudioProcessorEditor::updateTimeControls()
@@ -189,19 +260,19 @@ void WaveformAudioProcessorEditor::updateTimeControls()
 
 void WaveformAudioProcessorEditor::timerCallback()
 {
-    const auto resolved = processor.resolveCurrentWindow();
+}
 
-    juce::String text = juce::String::formatted("Window %.1f ms", resolved.ms);
-
-    if (getChoiceIndex(state, ParamIDs::timeMode) == static_cast<int>(TimeMode::sync))
+bool WaveformAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
+{
+    if (key.getModifiers().isCtrlDown() && (key.getTextCharacter() == 'd' || key.getTextCharacter() == 'D'))
     {
-        if (resolved.tempoReliable)
-            text << juce::String::formatted(" | Host BPM %.2f", resolved.bpmUsed);
-        else
-            text << juce::String::formatted(" | Fallback BPM %.2f", resolved.bpmUsed);
+        debugOverlayEnabled = ! debugOverlayEnabled;
+        waveformView.setDebugOverlayEnabled(debugOverlayEnabled);
+        repaint();
+        return true;
     }
 
-    tempoLabel.setText(text, juce::dontSendNotification);
+    return false;
 }
 
 } // namespace wvfrm

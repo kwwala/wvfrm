@@ -13,15 +13,15 @@ class WaveformAudioProcessorEditor : public juce::AudioProcessorEditor,
 {
 public:
     explicit WaveformAudioProcessorEditor(WaveformAudioProcessor&);
-    ~WaveformAudioProcessorEditor() override = default;
+    ~WaveformAudioProcessorEditor() override;
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
 private:
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
     void configureCombo(juce::ComboBox& box, const juce::StringArray& choices);
     void configureKnob(juce::Slider& slider, const juce::String& suffix);
@@ -31,9 +31,8 @@ private:
     WaveformAudioProcessor& processor;
     juce::AudioProcessorValueTreeState& state;
 
+    std::unique_ptr<juce::LookAndFeel_V4> lookAndFeel;
     juce::Label titleLabel;
-    juce::Label tempoLabel;
-
     juce::ComboBox timeModeBox;
     juce::ComboBox timeDivisionBox;
     juce::ComboBox channelViewBox;
@@ -41,21 +40,12 @@ private:
     juce::ComboBox themePresetBox;
 
     juce::Slider timeMsSlider;
-    juce::Slider themeIntensitySlider;
-    juce::Slider waveGainSlider;
-    juce::Slider smoothingSlider;
-    juce::ToggleButton loopButton;
-
     juce::Label timeModeLabel;
     juce::Label timeDivisionLabel;
     juce::Label timeMsLabel;
     juce::Label channelViewLabel;
     juce::Label colorModeLabel;
     juce::Label themePresetLabel;
-    juce::Label themeIntensityLabel;
-    juce::Label waveGainLabel;
-    juce::Label smoothingLabel;
-    juce::Label loopLabel;
 
     WaveformView waveformView;
 
@@ -66,10 +56,7 @@ private:
     std::unique_ptr<ComboAttachment> themePresetAttachment;
 
     std::unique_ptr<SliderAttachment> timeMsAttachment;
-    std::unique_ptr<SliderAttachment> themeIntensityAttachment;
-    std::unique_ptr<SliderAttachment> waveGainAttachment;
-    std::unique_ptr<SliderAttachment> smoothingAttachment;
-    std::unique_ptr<ButtonAttachment> loopAttachment;
+    bool debugOverlayEnabled = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WaveformAudioProcessorEditor)
 };
