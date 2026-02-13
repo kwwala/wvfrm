@@ -45,6 +45,7 @@ private:
     void drawTrack(juce::Graphics& g,
                    juce::Rectangle<int> bounds,
                    const juce::AudioBuffer<float>& source,
+                   int trackIndex,
                    RenderMode mode,
                    const juce::String& label,
                    ThemePreset themePreset,
@@ -53,6 +54,8 @@ private:
                    float loopPhase,
                    bool phaseReliable,
                    bool resetSuggested,
+                   bool resetTemporalState,
+                   double dtSeconds,
                    float gainLinear,
                    float rmsSmoothing) const;
 
@@ -68,6 +71,12 @@ private:
     mutable std::vector<float> maxPerX;
     mutable std::vector<float> ampPerX;
     mutable std::vector<uint8_t> activePerX;
+    mutable std::vector<std::vector<BandEnergies>> temporalEnergiesByTrack;
+    mutable std::vector<std::vector<uint8_t>> temporalInitByTrack;
+    mutable std::vector<RenderMode> temporalTrackModes;
+    mutable double lastColourFrameTimeSec = 0.0;
+    mutable bool wasVisibleForTemporalState = false;
+    mutable bool lastThreeBandTemporalEnabled = false;
     bool debugOverlayEnabled = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WaveformView)

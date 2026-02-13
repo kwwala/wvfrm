@@ -63,6 +63,14 @@ void WaveformView::paint(juce::Graphics& g)
     const auto gainDb = getFloatValue(state, ParamIDs::waveGainVisual, 0.0f);
     const auto gainLinear = juce::Decibels::decibelsToGain(gainDb);
     const auto loopPhase = juce::jlimit(0.0f, 1.0f, renderFrame.phaseNormalized);
+    const auto threeBandEnabled = colorMode == ColorMode::threeBand;
+
+    const auto nowSeconds = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    auto dtSeconds = 1.0 / 60.0;
+    if (lastColourFrameTimeSec > 0.0)
+        dtSeconds = juce::jlimit(1.0 / 240.0, 1.0 / 15.0, nowSeconds - lastColourFrameTimeSec);
+
+    lastColourFrameTimeSec = nowSeconds;
 
     auto contentBounds = bounds.reduced(8);
 
@@ -98,6 +106,40 @@ void WaveformView::paint(juce::Graphics& g)
     if (tracks.empty())
         return;
 
+    auto resetAllTemporalState = renderFrame.resetSuggested
+        || ! wasVisibleForTemporalState
+        || (threeBandEnabled != lastThreeBandTemporalEnabled);
+
+    if (temporalEnergiesByTrack.size() != tracks.size()
+        || temporalInitByTrack.size() != tracks.size()
+        || temporalTrackModes.size() != tracks.size())
+    {
+        temporalEnergiesByTrack.assign(tracks.size(), {});
+        temporalInitByTrack.assign(tracks.size(), {});
+        temporalTrackModes.assign(tracks.size(), RenderMode::left);
+        resetAllTemporalState = true;
+    }
+
+    const auto trackRenderWidth = juce::jmax(1, contentBounds.getWidth());
+    std::vector<uint8_t> resetTemporalByTrack(tracks.size(), static_cast<uint8_t>(resetAllTemporalState ? 1 : 0));
+
+    for (size_t i = 0; i < tracks.size(); ++i)
+    {
+        if (temporalTrackModes[i] != tracks[i].mode)
+        {
+            temporalTrackModes[i] = tracks[i].mode;
+            resetTemporalByTrack[i] = static_cast<uint8_t>(1);
+        }
+
+        if (temporalEnergiesByTrack[i].size() != static_cast<size_t>(trackRenderWidth)
+            || temporalInitByTrack[i].size() != static_cast<size_t>(trackRenderWidth))
+        {
+            temporalEnergiesByTrack[i].assign(static_cast<size_t>(trackRenderWidth), {});
+            temporalInitByTrack[i].assign(static_cast<size_t>(trackRenderWidth), static_cast<uint8_t>(0));
+            resetTemporalByTrack[i] = static_cast<uint8_t>(1);
+        }
+    }
+
     const auto trackHeight = contentBounds.getHeight() / static_cast<int>(tracks.size());
 
     for (size_t i = 0; i < tracks.size(); ++i)
@@ -110,6 +152,7 @@ void WaveformView::paint(juce::Graphics& g)
         drawTrack(g,
                   trackBounds,
                   renderFrame.samples,
+                  static_cast<int>(i),
                   tracks[i].mode,
                   tracks[i].label,
                   themePreset,
@@ -118,9 +161,14 @@ void WaveformView::paint(juce::Graphics& g)
                   loopPhase,
                   renderFrame.phaseReliable,
                   renderFrame.resetSuggested,
+                  resetTemporalByTrack[i] != 0,
+                  dtSeconds,
                   gainLinear,
                   smoothing);
     }
+
+    wasVisibleForTemporalState = true;
+    lastThreeBandTemporalEnabled = threeBandEnabled;
 
     if (debugOverlayEnabled)
     {
@@ -145,6 +193,11 @@ void WaveformView::timerCallback()
 {
     if (isShowing() && isVisible())
         repaint();
+    else
+    {
+        wasVisibleForTemporalState = false;
+        lastColourFrameTimeSec = 0.0;
+    }
 }
 
 void WaveformView::ensureRenderBuffers(int width) const
@@ -164,6 +217,7 @@ void WaveformView::ensureRenderBuffers(int width) const
 void WaveformView::drawTrack(juce::Graphics& g,
                              juce::Rectangle<int> bounds,
                              const juce::AudioBuffer<float>& source,
+                             int trackIndex,
                              RenderMode mode,
                              const juce::String& label,
                              ThemePreset themePreset,
@@ -172,6 +226,8 @@ void WaveformView::drawTrack(juce::Graphics& g,
                              float loopPhase,
                              bool phaseReliable,
                              bool resetSuggested,
+                             bool resetTemporalState,
+                             double dtSeconds,
                              float gainLinear,
                              float smoothing) const
 {
@@ -316,6 +372,27 @@ void WaveformView::drawTrack(juce::Graphics& g,
 
     const int offsets[3] = { -1, 0, 1 };
     const float weights[3] = { 1.0f, 2.0f, 1.0f };
+    const auto applyTemporalSmoothing = colorMode == ColorMode::threeBand
+        && trackIndex >= 0
+        && trackIndex < static_cast<int>(temporalEnergiesByTrack.size())
+        && trackIndex < static_cast<int>(temporalInitByTrack.size())
+        && temporalEnergiesByTrack[static_cast<size_t>(trackIndex)].size() == static_cast<size_t>(width)
+        && temporalInitByTrack[static_cast<size_t>(trackIndex)].size() == static_cast<size_t>(width);
+
+    const auto attackMs = juce::jmap(smoothing, 0.0f, 1.0f, 18.0f, 60.0f);
+    const auto releaseMs = juce::jmap(smoothing, 0.0f, 1.0f, 120.0f, 360.0f);
+    const auto attackTauSeconds = juce::jmax(1.0e-4, static_cast<double>(attackMs) * 0.001);
+    const auto releaseTauSeconds = juce::jmax(1.0e-4, static_cast<double>(releaseMs) * 0.001);
+    auto* temporalTrack = applyTemporalSmoothing ? &temporalEnergiesByTrack[static_cast<size_t>(trackIndex)] : nullptr;
+    auto* temporalInit = applyTemporalSmoothing ? &temporalInitByTrack[static_cast<size_t>(trackIndex)] : nullptr;
+
+    const auto smoothBandValue = [dtSeconds, attackTauSeconds, releaseTauSeconds] (float previous, float target)
+    {
+        const auto tau = target > previous ? attackTauSeconds : releaseTauSeconds;
+        const auto alpha = std::exp(-dtSeconds / tau);
+        return static_cast<float>(alpha * static_cast<double>(previous)
+                                  + (1.0 - alpha) * static_cast<double>(target));
+    };
 
     for (int x = 0; x < width; ++x)
     {
@@ -374,6 +451,38 @@ void WaveformView::drawTrack(juce::Graphics& g,
                 energies.mid = midSum / weightSum;
                 energies.high = highSum / weightSum;
             }
+        }
+
+        if (applyTemporalSmoothing && temporalTrack != nullptr && temporalInit != nullptr)
+        {
+            auto& smoothed = (*temporalTrack)[index];
+            auto& initialized = (*temporalInit)[index];
+
+            if (resetTemporalState || initialized == 0)
+            {
+                smoothed = energies;
+                initialized = static_cast<uint8_t>(1);
+            }
+            else
+            {
+                smoothed.low = smoothBandValue(smoothed.low, energies.low);
+                smoothed.mid = smoothBandValue(smoothed.mid, energies.mid);
+                smoothed.high = smoothBandValue(smoothed.high, energies.high);
+            }
+
+            const auto sum = smoothed.low + smoothed.mid + smoothed.high;
+            if (sum > 1.0e-6f)
+            {
+                smoothed.low /= sum;
+                smoothed.mid /= sum;
+                smoothed.high /= sum;
+            }
+            else
+            {
+                smoothed = {};
+            }
+
+            energies = smoothed;
         }
 
         auto colour = themeEngine.colourFor(energies,
