@@ -19,99 +19,141 @@ float circularDistance(float a, float b) noexcept
     const auto direct = std::abs(a - b);
     return juce::jmin(direct, 1.0f - direct);
 }
+
+bool isForwardWrap(float previous, float current) noexcept
+{
+    return previous > 0.8f && current < 0.2f;
+}
 }
 
 SyncClockOutput updateSyncLoopClock(const SyncClockInput& input,
-                                    SyncClockState& state,
-                                    double graceSeconds) noexcept
+                                    SyncClockState& state) noexcept
 {
     SyncClockOutput out {};
 
     const auto safeRate = juce::jmax(1.0, input.sampleRate);
     const auto safeBeatsInLoop = juce::jmax(1.0e-9, input.beatsInLoop);
-    const auto safeBpm = juce::jmax(1.0, input.hostBpm);
+
+    const auto fallbackBpm = input.hostBpmValid
+        ? juce::jmax(1.0, input.hostBpm)
+        : juce::jmax(1.0, state.lastKnownBpm);
+
+    if (input.hostBpmValid)
+        state.lastKnownBpm = fallbackBpm;
+
+    const auto restartedPlayback = input.isPlaying && ! state.wasPlaying;
+
+    auto hostTimeDiscontinuity = false;
+    if (input.isPlaying
+        && state.wasPlaying
+        && input.hasHostTimeInSamples
+        && state.hasLastHostTime)
+    {
+        const auto hostDelta = input.hostTimeInSamples - state.lastHostTimeInSamples;
+        const auto expectedDelta = static_cast<int64_t>(juce::jmax(0, input.blockNumSamples));
+        const auto tolerance = juce::jmax<int64_t>(expectedDelta * 2,
+                                                   static_cast<int64_t>(safeRate * 0.02));
+        hostTimeDiscontinuity = (hostDelta < 0)
+            || (std::llabs(hostDelta - expectedDelta) > tolerance);
+    }
+
+    const auto beatsChanged = state.hasLastBeatsInLoop
+        && (std::abs(state.lastBeatsInLoop - safeBeatsInLoop) > 1.0e-9);
+
+    if (! input.isPlaying)
+    {
+        out.phaseAtBlockStart = state.hasLastPhase ? state.lastPhase : 0.0f;
+        out.phaseReliable = false;
+        out.resetSuggested = false;
+
+        if (input.hostPhaseValid)
+        {
+            state.hasAnchor = true;
+            state.anchorSampleLocal = input.blockStartSampleLocal;
+            state.anchorPpq = input.hostPpq;
+        }
+
+        state.hasLastPhase = true;
+        state.lastPhase = out.phaseAtBlockStart;
+        state.lastPhaseReliable = false;
+        state.lastSampleLocal = input.blockStartSampleLocal;
+
+        state.hasLastHostTime = input.hasHostTimeInSamples;
+        if (input.hasHostTimeInSamples)
+            state.lastHostTimeInSamples = input.hostTimeInSamples;
+
+        state.hasLastBeatsInLoop = true;
+        state.lastBeatsInLoop = safeBeatsInLoop;
+        state.wasPlaying = false;
+        return out;
+    }
+
+    out.resetSuggested = restartedPlayback || hostTimeDiscontinuity || beatsChanged;
 
     if (input.hostPhaseValid)
     {
         auto phase = static_cast<float>(positiveFraction(input.hostPpq / safeBeatsInLoop));
         phase = juce::jlimit(0.0f, 1.0f, phase);
-        auto jitterSuppressed = false;
 
         if (state.hasLastPhase)
         {
-            const auto delta = phase - state.lastPhase;
-            const auto wrapped = delta < -0.5f;
+            const auto wrapped = isForwardWrap(state.lastPhase, phase);
+            const auto largeJump = circularDistance(state.lastPhase, phase) > 0.35f;
 
-            if (! wrapped && delta < 0.0f)
-            {
-                // Ignore small backward host jitter to prevent visual creep.
-                if (delta > -0.03f)
-                {
-                    phase = state.lastPhase;
-                    jitterSuppressed = true;
-                }
-                else
-                    out.resetSuggested = true;
-            }
-
-            if (! wrapped && std::abs(phase - state.lastPhase) > 0.35f)
+            if (! wrapped && largeJump)
                 out.resetSuggested = true;
 
-            if (! state.lastReliable && circularDistance(phase, state.lastPhase) > 0.06f)
+            if (! state.lastPhaseReliable && circularDistance(state.lastPhase, phase) > 0.06f)
                 out.resetSuggested = true;
         }
 
-        if (! jitterSuppressed)
-        {
-            state.hasReference = true;
-            state.referencePpq = input.hostPpq;
-            state.referenceEndSample = input.blockEndSample;
-            state.referenceBpm = safeBpm;
-        }
-
-        state.hasLastPhase = true;
-        state.lastPhase = phase;
-        state.lastReliable = true;
-
-        out.phaseNormalized = phase;
+        out.phaseAtBlockStart = phase;
         out.phaseReliable = true;
-        return out;
+
+        state.hasAnchor = true;
+        state.anchorSampleLocal = input.blockStartSampleLocal;
+        state.anchorPpq = input.hostPpq;
     }
-
-    float phase = state.hasLastPhase ? state.lastPhase : 0.0f;
-    auto reliable = false;
-
-    if (state.hasReference)
+    else
     {
-        const auto elapsedSamples = juce::jmax<int64_t>(0, input.blockEndSample - state.referenceEndSample);
-        const auto graceSamples = static_cast<int64_t>(std::llround(juce::jmax(0.0, graceSeconds) * safeRate));
+        auto phase = state.hasLastPhase ? state.lastPhase : 0.0f;
 
-        if (elapsedSamples <= graceSamples)
+        if (beatsChanged || hostTimeDiscontinuity || restartedPlayback)
+            state.hasAnchor = false;
+
+        if (state.hasAnchor)
         {
-            const auto beatsAdvanced = (static_cast<double>(elapsedSamples) * state.referenceBpm) / (60.0 * safeRate);
-            const auto predictedPpq = state.referencePpq + beatsAdvanced;
-            phase = static_cast<float>(positiveFraction(predictedPpq / safeBeatsInLoop));
-            phase = juce::jlimit(0.0f, 1.0f, phase);
-
-            if (state.hasLastPhase)
-            {
-                const auto delta = phase - state.lastPhase;
-                const auto wrapped = delta < -0.5f;
-                if (! wrapped && delta < 0.0f)
-                    phase = state.lastPhase;
-            }
-
-            reliable = true;
+            const auto samplesFromAnchor = juce::jmax<int64_t>(0, input.blockStartSampleLocal - state.anchorSampleLocal);
+            const auto beatsAdvanced = (static_cast<double>(samplesFromAnchor) * fallbackBpm) / (60.0 * safeRate);
+            phase = static_cast<float>(positiveFraction((state.anchorPpq + beatsAdvanced) / safeBeatsInLoop));
         }
+        else
+        {
+            const auto sampleDelta = state.hasLastPhase
+                ? juce::jmax<int64_t>(0, input.blockStartSampleLocal - state.lastSampleLocal)
+                : static_cast<int64_t>(juce::jmax(0, input.blockNumSamples));
+            const auto phaseAdvance = (static_cast<double>(sampleDelta) * fallbackBpm)
+                / (60.0 * safeRate * safeBeatsInLoop);
+            phase = static_cast<float>(positiveFraction(static_cast<double>(phase) + phaseAdvance));
+        }
+
+        out.phaseAtBlockStart = juce::jlimit(0.0f, 1.0f, phase);
+        out.phaseReliable = false;
     }
 
     state.hasLastPhase = true;
-    state.lastPhase = phase;
-    state.lastReliable = reliable;
+    state.lastPhase = out.phaseAtBlockStart;
+    state.lastPhaseReliable = out.phaseReliable;
+    state.lastSampleLocal = input.blockStartSampleLocal;
 
-    out.phaseNormalized = phase;
-    out.phaseReliable = reliable;
-    out.resetSuggested = false;
+    state.hasLastHostTime = input.hasHostTimeInSamples;
+    if (input.hasHostTimeInSamples)
+        state.lastHostTimeInSamples = input.hostTimeInSamples;
+
+    state.hasLastBeatsInLoop = true;
+    state.lastBeatsInLoop = safeBeatsInLoop;
+    state.wasPlaying = true;
+
     return out;
 }
 

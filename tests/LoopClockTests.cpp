@@ -5,6 +5,11 @@
 
 namespace
 {
+bool movedBackwardWithoutWrap(float previous, float current)
+{
+    return (current + 1.0e-4f < previous) && ! (previous > 0.8f && current < 0.2f);
+}
+
 bool nearlyEqual(float a, float b, float tolerance)
 {
     return std::abs(a - b) <= tolerance;
@@ -15,95 +20,219 @@ bool runLoopClockTests()
 {
     bool ok = true;
 
-    wvfrm::SyncClockState state {};
+    {
+        wvfrm::SyncClockState state {};
+        int64_t sample = 0;
+        float previousPhase = 0.0f;
+
+        for (int i = 0; i < 10000; ++i)
+        {
+            const auto blockSize = 32 + (i % 7) * 29;
+
+            wvfrm::SyncClockInput input {};
+            input.hostPhaseValid = true;
+            input.hostPpq = (static_cast<double>(sample) * 120.0) / (60.0 * 48000.0);
+            input.hostBpmValid = true;
+            input.hostBpm = 120.0;
+            input.blockStartSampleLocal = sample;
+            input.blockNumSamples = blockSize;
+            input.sampleRate = 48000.0;
+            input.beatsInLoop = 4.0;
+            input.isPlaying = true;
+            input.hasHostTimeInSamples = true;
+            input.hostTimeInSamples = sample;
+
+            const auto out = wvfrm::updateSyncLoopClock(input, state);
+
+            if (! out.phaseReliable)
+            {
+                std::cerr << "LoopClock: expected reliable phase under valid PPQ." << std::endl;
+                ok = false;
+                break;
+            }
+
+            if (i > 0 && movedBackwardWithoutWrap(previousPhase, out.phaseAtBlockStart))
+            {
+                std::cerr << "LoopClock: phase moved backward without wrap under host lock." << std::endl;
+                ok = false;
+                break;
+            }
+
+            previousPhase = out.phaseAtBlockStart;
+            sample += blockSize;
+        }
+    }
 
     {
+        wvfrm::SyncClockState state {};
+
+        wvfrm::SyncClockInput seed {};
+        seed.hostPhaseValid = true;
+        seed.hostPpq = 8.0;
+        seed.hostBpmValid = true;
+        seed.hostBpm = 120.0;
+        seed.blockStartSampleLocal = 0;
+        seed.blockNumSamples = 128;
+        seed.sampleRate = 48000.0;
+        seed.beatsInLoop = 4.0;
+        seed.isPlaying = true;
+        const auto seeded = wvfrm::updateSyncLoopClock(seed, state);
+
+        float previousPhase = seeded.phaseAtBlockStart;
+        int64_t sample = 128;
+
+        for (int i = 0; i < 2500; ++i)
+        {
+            const auto blockSize = 64 + (i % 5) * 37;
+
+            wvfrm::SyncClockInput dropout {};
+            dropout.hostPhaseValid = false;
+            dropout.hostBpmValid = true;
+            dropout.hostBpm = 120.0;
+            dropout.blockStartSampleLocal = sample;
+            dropout.blockNumSamples = blockSize;
+            dropout.sampleRate = 48000.0;
+            dropout.beatsInLoop = 4.0;
+            dropout.isPlaying = true;
+
+            const auto out = wvfrm::updateSyncLoopClock(dropout, state);
+
+            if (out.phaseReliable)
+            {
+                std::cerr << "LoopClock: fallback phase should be marked unreliable." << std::endl;
+                ok = false;
+                break;
+            }
+
+            if (movedBackwardWithoutWrap(previousPhase, out.phaseAtBlockStart))
+            {
+                std::cerr << "LoopClock: fallback phase moved backward without wrap." << std::endl;
+                ok = false;
+                break;
+            }
+
+            previousPhase = out.phaseAtBlockStart;
+            sample += blockSize;
+        }
+
+        wvfrm::SyncClockInput regained {};
+        regained.hostPhaseValid = true;
+        regained.hostPpq = 27.6;
+        regained.hostBpmValid = true;
+        regained.hostBpm = 120.0;
+        regained.blockStartSampleLocal = sample;
+        regained.blockNumSamples = 256;
+        regained.sampleRate = 48000.0;
+        regained.beatsInLoop = 4.0;
+        regained.isPlaying = true;
+
+        const auto regainedOut = wvfrm::updateSyncLoopClock(regained, state);
+        if (! regainedOut.phaseReliable || ! regainedOut.resetSuggested)
+        {
+            std::cerr << "LoopClock: expected resetSuggested when PPQ returns with large discontinuity." << std::endl;
+            ok = false;
+        }
+    }
+
+    {
+        wvfrm::SyncClockState state {};
+
         wvfrm::SyncClockInput first {};
         first.hostPhaseValid = true;
         first.hostPpq = 4.0;
+        first.hostBpmValid = true;
         first.hostBpm = 120.0;
-        first.blockEndSample = 48000;
+        first.blockStartSampleLocal = 0;
+        first.blockNumSamples = 128;
         first.sampleRate = 48000.0;
         first.beatsInLoop = 4.0;
+        first.isPlaying = true;
 
-        const auto out = wvfrm::updateSyncLoopClock(first, state);
-        if (! out.phaseReliable || ! nearlyEqual(out.phaseNormalized, 0.0f, 1.0e-4f))
+        const auto startOut = wvfrm::updateSyncLoopClock(first, state);
+
+        float heldPhase = startOut.phaseAtBlockStart;
+        int64_t sample = 128;
+        for (int i = 0; i < 64; ++i)
         {
-            std::cerr << "LoopClock: expected reliable phase at 0.0 for aligned PPQ." << std::endl;
+            wvfrm::SyncClockInput stopped {};
+            stopped.hostPhaseValid = false;
+            stopped.hostBpmValid = true;
+            stopped.hostBpm = 120.0;
+            stopped.blockStartSampleLocal = sample;
+            stopped.blockNumSamples = 128;
+            stopped.sampleRate = 48000.0;
+            stopped.beatsInLoop = 4.0;
+            stopped.isPlaying = false;
+
+            const auto out = wvfrm::updateSyncLoopClock(stopped, state);
+            if (! nearlyEqual(out.phaseAtBlockStart, heldPhase, 1.0e-6f))
+            {
+                std::cerr << "LoopClock: stop state should hold phase steady." << std::endl;
+                ok = false;
+                break;
+            }
+
+            sample += 128;
+        }
+
+        wvfrm::SyncClockInput resumed {};
+        resumed.hostPhaseValid = true;
+        resumed.hostPpq = 5.0;
+        resumed.hostBpmValid = true;
+        resumed.hostBpm = 120.0;
+        resumed.blockStartSampleLocal = sample;
+        resumed.blockNumSamples = 128;
+        resumed.sampleRate = 48000.0;
+        resumed.beatsInLoop = 4.0;
+        resumed.isPlaying = true;
+
+        const auto resumedOut = wvfrm::updateSyncLoopClock(resumed, state);
+        if (! resumedOut.resetSuggested)
+        {
+            std::cerr << "LoopClock: expected resetSuggested on playback resume." << std::endl;
             ok = false;
         }
     }
 
     {
-        wvfrm::SyncClockInput jitter {};
-        jitter.hostPhaseValid = true;
-        jitter.hostPpq = 5.0; // phase 0.25
-        jitter.hostBpm = 120.0;
-        jitter.blockEndSample = 96000;
-        jitter.sampleRate = 48000.0;
-        jitter.beatsInLoop = 4.0;
-        auto out = wvfrm::updateSyncLoopClock(jitter, state);
-        if (! nearlyEqual(out.phaseNormalized, 0.25f, 1.0e-4f))
+        wvfrm::SyncClockState state {};
+
+        float previousPhase = 0.0f;
+        auto sawMovement = false;
+        int64_t sample = 0;
+
+        for (int i = 0; i < 1200; ++i)
         {
-            std::cerr << "LoopClock: expected 0.25 phase for PPQ 5.0 on 4-beat loop." << std::endl;
-            ok = false;
+            const auto blockSize = 48 + (i % 4) * 64;
+
+            wvfrm::SyncClockInput bpmOnly {};
+            bpmOnly.hostPhaseValid = false;
+            bpmOnly.hostBpmValid = true;
+            bpmOnly.hostBpm = 100.0;
+            bpmOnly.blockStartSampleLocal = sample;
+            bpmOnly.blockNumSamples = blockSize;
+            bpmOnly.sampleRate = 48000.0;
+            bpmOnly.beatsInLoop = 4.0;
+            bpmOnly.isPlaying = true;
+
+            const auto out = wvfrm::updateSyncLoopClock(bpmOnly, state);
+            if (movedBackwardWithoutWrap(previousPhase, out.phaseAtBlockStart))
+            {
+                std::cerr << "LoopClock: BPM-only fallback phase moved backward without wrap." << std::endl;
+                ok = false;
+                break;
+            }
+
+            if (std::abs(out.phaseAtBlockStart - previousPhase) > 1.0e-6f)
+                sawMovement = true;
+
+            previousPhase = out.phaseAtBlockStart;
+            sample += blockSize;
         }
 
-        jitter.hostPpq = 4.995; // tiny negative jitter
-        jitter.blockEndSample = 96500;
-        out = wvfrm::updateSyncLoopClock(jitter, state);
-        if (! nearlyEqual(out.phaseNormalized, 0.25f, 1.0e-4f))
+        if (! sawMovement)
         {
-            std::cerr << "LoopClock: expected jitter suppression for tiny backward host step." << std::endl;
-            ok = false;
-        }
-    }
-
-    {
-        wvfrm::SyncClockInput grace {};
-        grace.hostPhaseValid = false;
-        grace.hostBpm = 120.0;
-        grace.blockEndSample = 102000; // 125 ms at 48k from last ref (96k)
-        grace.sampleRate = 48000.0;
-        grace.beatsInLoop = 4.0;
-
-        const auto out = wvfrm::updateSyncLoopClock(grace, state);
-        if (! out.phaseReliable || ! nearlyEqual(out.phaseNormalized, 0.3125f, 5.0e-3f))
-        {
-            std::cerr << "LoopClock: expected grace-phase prediction during short PPQ dropout." << std::endl;
-            ok = false;
-        }
-    }
-
-    {
-        wvfrm::SyncClockInput dropout {};
-        dropout.hostPhaseValid = false;
-        dropout.hostBpm = 120.0;
-        dropout.blockEndSample = 120500; // >250 ms from reference
-        dropout.sampleRate = 48000.0;
-        dropout.beatsInLoop = 4.0;
-
-        const auto out = wvfrm::updateSyncLoopClock(dropout, state);
-        if (out.phaseReliable)
-        {
-            std::cerr << "LoopClock: expected unreliable phase after grace timeout." << std::endl;
-            ok = false;
-        }
-    }
-
-    {
-        wvfrm::SyncClockInput regained {};
-        regained.hostPhaseValid = true;
-        regained.hostPpq = 7.6; // phase 0.9
-        regained.hostBpm = 120.0;
-        regained.blockEndSample = 121000;
-        regained.sampleRate = 48000.0;
-        regained.beatsInLoop = 4.0;
-
-        const auto out = wvfrm::updateSyncLoopClock(regained, state);
-        if (! out.phaseReliable || ! out.resetSuggested)
-        {
-            std::cerr << "LoopClock: expected reset hint when host phase returns far from held phase." << std::endl;
+            std::cerr << "LoopClock: BPM-only fallback did not advance phase." << std::endl;
             ok = false;
         }
     }

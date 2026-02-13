@@ -18,7 +18,8 @@ public:
         juce::AudioBuffer<float> samples;
         float phaseNormalized = 0.0f;
         bool phaseReliable = false;
-        int64_t frameEndSample = 0;
+        int64_t phaseSample = 0;
+        bool isPlaying = false;
         double bpmUsed = 120.0;
         bool resetSuggested = false;
     };
@@ -78,12 +79,15 @@ private:
     std::atomic<long long> processedSamples { 0 };
 
     std::atomic<uint64_t> renderClockSeq { 0 };
-    std::atomic<int64_t> lastClockEndSample { 0 };
+    std::atomic<int64_t> lastClockPhaseSample { 0 };
     std::atomic<float> lastClockPhase { 0.0f };
     std::atomic<bool> lastClockReliable { false };
     std::atomic<double> lastClockBpm { 120.0 };
     std::atomic<bool> lastClockResetSuggested { false };
+    std::atomic<bool> lastClockIsPlaying { false };
     SyncClockState syncClockState;
+
+    bool buildLoopRenderFrame(LoopRenderFrame& out, int requestedSamples) const;
 
     std::atomic<int> editorWidth { 960 };
     std::atomic<int> editorHeight { 540 };

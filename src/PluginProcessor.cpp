@@ -42,11 +42,12 @@ void WaveformAudioProcessor::prepareToPlay(double sampleRate, int)
     syncClockState = {};
 
     renderClockSeq.store(0);
-    lastClockEndSample.store(0);
+    lastClockPhaseSample.store(0);
     lastClockPhase.store(0.0f);
     lastClockReliable.store(false);
     lastClockBpm.store(juce::jmax(1.0, lastKnownBpm.load()));
     lastClockResetSuggested.store(false);
+    lastClockIsPlaying.store(false);
 
     const auto capacity = juce::jlimit(65536, 2 * 1024 * 1024, static_cast<int>(std::ceil(sampleRate * 9.0)));
     analysisBuffer.prepare(2, capacity);
@@ -72,13 +73,25 @@ void WaveformAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 {
     juce::ScopedNoDenormals noDenormals;
 
-    if (auto* playHead = getPlayHead())
+    auto hostHasPpq = false;
+    auto hostPpq = 0.0;
+    auto hostHasBpm = false;
+    auto hostBpm = juce::jmax(1.0, lastKnownBpm.load());
+    auto hostIsPlaying = true;
+    auto hostHasTimeInSamples = false;
+    int64_t hostTimeInSamples = 0;
+
+    if (auto* currentPlayHead = getPlayHead())
     {
-        if (auto position = playHead->getPosition())
+        if (auto position = currentPlayHead->getPosition())
         {
+            hostIsPlaying = position->getIsPlaying();
+
             if (const auto bpm = position->getBpm())
             {
                 const auto safeBpm = juce::jmax(1.0, *bpm);
+                hostHasBpm = true;
+                hostBpm = safeBpm;
                 hostTempoBpm.store(safeBpm);
                 lastKnownBpm.store(safeBpm);
                 tempoReliable.store(true);
@@ -90,12 +103,20 @@ void WaveformAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
             if (const auto ppq = position->getPpqPosition())
             {
+                hostHasPpq = true;
+                hostPpq = *ppq;
                 hostPpqPosition.store(*ppq);
                 ppqReliable.store(true);
             }
             else
             {
                 ppqReliable.store(false);
+            }
+
+            if (const auto timeInSamples = position->getTimeInSamples())
+            {
+                hostHasTimeInSamples = true;
+                hostTimeInSamples = *timeInSamples;
             }
         }
         else
@@ -116,10 +137,9 @@ void WaveformAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     for (auto channel = totalInputChannels; channel < totalOutputChannels; ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
 
-    analysisBuffer.pushBuffer(buffer);
-
     const auto blockSamples = buffer.getNumSamples();
-    const auto blockEndSample = processedSamples.fetch_add(blockSamples) + static_cast<int64_t>(blockSamples);
+    const auto blockStartSample = processedSamples.fetch_add(blockSamples);
+    analysisBuffer.pushBuffer(buffer);
 
     const auto mode = getChoiceIndex(parameters, ParamIDs::timeMode);
     const auto division = getChoiceIndex(parameters, ParamIDs::timeSyncDivision);
@@ -128,33 +148,39 @@ void WaveformAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     auto phaseReliable = false;
     auto resetSuggested = false;
     auto bpmUsed = juce::jmax(1.0, lastKnownBpm.load());
+    auto phaseSample = blockStartSample;
 
     if (mode == static_cast<int>(TimeMode::sync))
     {
         const auto beatsInLoop = juce::jmax(1.0e-9, getDivisionBeats(division));
-        const auto hostBpm = tempoReliable.load() ? hostTempoBpm.load() : lastKnownBpm.load();
+        const auto bpmForClock = hostHasBpm ? hostBpm : juce::jmax(1.0, lastKnownBpm.load());
 
         const SyncClockInput input {
-            ppqReliable.load(),
-            hostPpqPosition.load(),
-            hostBpm,
-            blockEndSample,
+            hostHasPpq,
+            hostPpq,
+            hostHasBpm,
+            bpmForClock,
+            blockStartSample,
+            blockSamples,
             currentSampleRate.load(),
-            beatsInLoop
+            beatsInLoop,
+            hostIsPlaying,
+            hostHasTimeInSamples,
+            hostTimeInSamples
         };
 
-        const auto output = updateSyncLoopClock(input, syncClockState, 0.25);
-        phaseNormalized = output.phaseNormalized;
+        const auto output = updateSyncLoopClock(input, syncClockState);
+        phaseNormalized = output.phaseAtBlockStart;
         phaseReliable = output.phaseReliable;
         resetSuggested = output.resetSuggested;
-        bpmUsed = hostBpm;
+        bpmUsed = bpmForClock;
     }
     else
     {
         const auto resolved = resolveCurrentWindow();
         const auto intervalSeconds = juce::jmax(1.0e-6, resolved.ms * 0.001);
         const auto intervalSamples = juce::jmax(1.0, intervalSeconds * currentSampleRate.load());
-        phaseNormalized = static_cast<float>(positiveFraction(static_cast<double>(blockEndSample) / intervalSamples));
+        phaseNormalized = static_cast<float>(positiveFraction(static_cast<double>(blockStartSample) / intervalSamples));
         phaseReliable = true;
         resetSuggested = false;
         bpmUsed = resolved.bpmUsed;
@@ -162,11 +188,12 @@ void WaveformAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     }
 
     renderClockSeq.fetch_add(1, std::memory_order_acq_rel); // begin write (odd)
-    lastClockEndSample.store(blockEndSample, std::memory_order_relaxed);
+    lastClockPhaseSample.store(phaseSample, std::memory_order_relaxed);
     lastClockPhase.store(juce::jlimit(0.0f, 1.0f, phaseNormalized), std::memory_order_relaxed);
     lastClockReliable.store(phaseReliable, std::memory_order_relaxed);
     lastClockBpm.store(bpmUsed, std::memory_order_relaxed);
     lastClockResetSuggested.store(resetSuggested, std::memory_order_relaxed);
+    lastClockIsPlaying.store(hostIsPlaying, std::memory_order_relaxed);
     renderClockSeq.fetch_add(1, std::memory_order_release); // end write (even)
 }
 
@@ -306,24 +333,31 @@ double WaveformAudioProcessor::getLoopPhaseNormalized() const noexcept
 
 bool WaveformAudioProcessor::getLoopRenderFrame(LoopRenderFrame& out, int requestedSamples) const
 {
-    int64_t endSample = 0;
+    return buildLoopRenderFrame(out, requestedSamples);
+}
+
+bool WaveformAudioProcessor::buildLoopRenderFrame(LoopRenderFrame& out, int requestedSamples) const
+{
+    int64_t phaseSample = 0;
     float phase = 0.0f;
     auto reliable = false;
     auto resetSuggested = false;
+    auto isPlaying = false;
     auto bpmUsed = 120.0;
 
     auto snapshotReadOk = false;
-    for (int attempt = 0; attempt < 8; ++attempt)
+    for (int attempt = 0; attempt < 12; ++attempt)
     {
         const auto seqBegin = renderClockSeq.load(std::memory_order_acquire);
         if ((seqBegin & 1u) != 0u)
             continue;
 
-        endSample = lastClockEndSample.load(std::memory_order_relaxed);
+        phaseSample = lastClockPhaseSample.load(std::memory_order_relaxed);
         phase = lastClockPhase.load(std::memory_order_relaxed);
         reliable = lastClockReliable.load(std::memory_order_relaxed);
         bpmUsed = lastClockBpm.load(std::memory_order_relaxed);
         resetSuggested = lastClockResetSuggested.load(std::memory_order_relaxed);
+        isPlaying = lastClockIsPlaying.load(std::memory_order_relaxed);
 
         const auto seqEnd = renderClockSeq.load(std::memory_order_acquire);
         if (seqBegin == seqEnd)
@@ -336,12 +370,13 @@ bool WaveformAudioProcessor::getLoopRenderFrame(LoopRenderFrame& out, int reques
     if (! snapshotReadOk)
         return false;
 
-    if (! analysisBuffer.copyWindowEndingAt(out.samples, requestedSamples, endSample))
+    if (! analysisBuffer.copyWindowEndingAt(out.samples, requestedSamples, phaseSample))
         return false;
 
     out.phaseNormalized = juce::jlimit(0.0f, 1.0f, phase);
     out.phaseReliable = reliable;
-    out.frameEndSample = endSample;
+    out.phaseSample = phaseSample;
+    out.isPlaying = isPlaying;
     out.bpmUsed = bpmUsed;
     out.resetSuggested = resetSuggested;
     return true;

@@ -2,6 +2,8 @@
 
 #include "../JuceIncludes.h"
 
+#include <atomic>
+
 namespace wvfrm
 {
 
@@ -22,10 +24,10 @@ public:
 private:
     int safeChannelCount() const noexcept;
 
-    mutable juce::SpinLock lock;
+    std::atomic<uint64_t> sequence { 0 };
     juce::AudioBuffer<float> storage;
-    int writeIndex = 0;
-    int64_t totalWrittenSamples = 0;
+    std::atomic<int> writeIndex { 0 };
+    std::atomic<int64_t> totalWrittenSamples { 0 };
 };
 
 } // namespace wvfrm
