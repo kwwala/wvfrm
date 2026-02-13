@@ -15,6 +15,7 @@ namespace
 {
 constexpr float minimetersLineThickness = 1.15f;
 constexpr float defaultLineThickness = 1.35f;
+constexpr double colourAnalysisWindowSeconds = 0.05;
 }
 
 WaveformView::WaveformView(WaveformAudioProcessor& processorToUse)
@@ -197,6 +198,11 @@ void WaveformView::drawTrack(juce::Graphics& g,
     {
         const auto maxSamplesPerPixel = juce::jmax(1, (numSamples + width - 1) / juce::jmax(1, width));
         std::vector<float> derived(static_cast<size_t>(maxSamplesPerPixel));
+        const auto colourWindowSamples = juce::jlimit(64,
+                                                      juce::jmin(2048, numSamples),
+                                                      static_cast<int>(std::round(processor.getCurrentSampleRateHz()
+                                                                                   * colourAnalysisWindowSeconds)));
+        std::vector<float> colourDerived(static_cast<size_t>(juce::jmax(1, colourWindowSamples)));
 
         for (int x = 0; x < width; ++x)
         {
@@ -265,8 +271,31 @@ void WaveformView::drawTrack(juce::Graphics& g,
                                                     1.0f,
                                                     juce::jmax(std::abs(maximum), std::abs(minimum)));
 
-            const auto energies = bandAnalyzer.analyzeSegment(segmentData,
-                                                              segmentLength,
+            const auto center = (start + end) / 2;
+            auto colourStart = center - (colourWindowSamples / 2);
+            colourStart = juce::jlimit(0, juce::jmax(0, numSamples - colourWindowSamples), colourStart);
+            const auto colourLength = juce::jmax(1, juce::jmin(colourWindowSamples, numSamples - colourStart));
+
+            const float* colourData = nullptr;
+            if (mode == RenderMode::left)
+            {
+                colourData = source.getReadPointer(0, colourStart);
+            }
+            else if (mode == RenderMode::right)
+            {
+                const auto rightChannel = source.getNumChannels() > 1 ? 1 : 0;
+                colourData = source.getReadPointer(rightChannel, colourStart);
+            }
+            else
+            {
+                for (int i = 0; i < colourLength; ++i)
+                    colourDerived[static_cast<size_t>(i)] = sampleForMode(mode, source, colourStart + i);
+
+                colourData = colourDerived.data();
+            }
+
+            const auto energies = bandAnalyzer.analyzeSegment(colourData,
+                                                              colourLength,
                                                               processor.getCurrentSampleRateHz(),
                                                               smoothing);
 
