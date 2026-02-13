@@ -14,6 +14,26 @@ juce::Colour ThemeEngine::colourFor(BandEnergies energies,
     const auto intensity = juce::jlimit(0.0f, 1.0f, intensityPercent / 100.0f);
     const auto amp = juce::jlimit(0.0f, 1.0f, amplitudeNorm);
 
+    if (mode == ColorMode::threeBand)
+    {
+        // Increase chroma by emphasizing dominant bands before color blend.
+        const auto vibrancePower = theme == ThemePreset::minimeters3Band
+            ? juce::jmap(intensity, 0.0f, 1.0f, 1.12f, 1.38f)
+            : juce::jmap(intensity, 0.0f, 1.0f, 1.06f, 1.24f);
+
+        energies.low = std::pow(juce::jlimit(0.0f, 1.0f, energies.low), vibrancePower);
+        energies.mid = std::pow(juce::jlimit(0.0f, 1.0f, energies.mid), vibrancePower);
+        energies.high = std::pow(juce::jlimit(0.0f, 1.0f, energies.high), vibrancePower);
+
+        const auto sum = energies.low + energies.mid + energies.high;
+        if (sum > 1.0e-6f)
+        {
+            energies.low /= sum;
+            energies.mid /= sum;
+            energies.high /= sum;
+        }
+    }
+
     juce::Colour base = (mode == ColorMode::threeBand)
         ? blendThreeBand(energies, theme)
         : colourFromPreset(theme);
@@ -25,8 +45,8 @@ juce::Colour ThemeEngine::colourFor(BandEnergies energies,
 
     if (theme == ThemePreset::minimeters3Band)
     {
-        saturation = juce::jlimit(0.0f, 1.0f, 0.82f + 0.18f * intensity);
-        brightness = juce::jlimit(0.0f, 1.0f, 0.88f + 0.12f * intensity);
+        saturation = juce::jlimit(0.0f, 1.45f, 1.02f + 0.36f * intensity);
+        brightness = juce::jlimit(0.0f, 1.0f, 0.82f + 0.14f * intensity);
         if (mode == ColorMode::threeBand)
             alphaFloor = 0.2f;
         ampShaped = std::pow(amp, 0.75f);
@@ -35,8 +55,16 @@ juce::Colour ThemeEngine::colourFor(BandEnergies energies,
     {
         const auto saturationFloor = 0.35f;
         const auto brightnessFloor = 0.45f;
-        saturation = juce::jlimit(0.05f, 1.0f, saturationFloor + (1.0f - saturationFloor) * intensity);
-        brightness = juce::jlimit(0.0f, 1.0f, brightnessFloor + (1.0f - brightnessFloor) * intensity);
+        if (mode == ColorMode::threeBand)
+        {
+            saturation = juce::jlimit(0.05f, 1.35f, 0.88f + 0.34f * intensity);
+            brightness = juce::jlimit(0.0f, 1.0f, 0.74f + 0.20f * intensity);
+        }
+        else
+        {
+            saturation = juce::jlimit(0.05f, 1.0f, saturationFloor + (1.0f - saturationFloor) * intensity);
+            brightness = juce::jlimit(0.0f, 1.0f, brightnessFloor + (1.0f - brightnessFloor) * intensity);
+        }
     }
 
     const auto alpha = juce::jlimit(0.15f, 1.0f, alphaFloor + (1.0f - alphaFloor) * ampShaped);
