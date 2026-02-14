@@ -74,6 +74,8 @@ private:
     mutable std::vector<uint8_t> activePerX;
     mutable std::vector<std::vector<BandEnergies>> temporalEnergiesByTrack;
     mutable std::vector<std::vector<uint8_t>> temporalInitByTrack;
+    mutable std::vector<BandEnergies> normalizationPeakByTrack;
+    mutable std::vector<uint8_t> normalizationPeakInitByTrack;
     mutable std::vector<RenderMode> temporalTrackModes;
     mutable double lastColourFrameTimeSec = 0.0;
     mutable bool wasVisibleForTemporalState = false;

@@ -20,7 +20,6 @@ public:
 private:
     static juce::Colour colourFromPreset(ThemePreset theme) noexcept;
     static juce::Colour blendThreeBand(const BandEnergies& energies, ThemePreset theme) noexcept;
-    static juce::Colour blendMiniMetersWarm(const BandEnergies& energies) noexcept;
 };
 
 } // namespace wvfrm

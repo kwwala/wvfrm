@@ -15,12 +15,15 @@ BandEnergies BandAnalyzer3::analyzeSegment(const float* samples,
     if (samples == nullptr || numSamples <= 0 || sampleRate <= 0.0)
         return output;
 
+    constexpr auto subCut = 20.0;
     constexpr auto lowCut = 200.0;
     constexpr auto highCut = 2000.0;
 
+    const auto subAlpha = alphaForCutoff(subCut, sampleRate);
     const auto lowAlpha = alphaForCutoff(lowCut, sampleRate);
     const auto highAlpha = alphaForCutoff(highCut, sampleRate);
 
+    float subLpState = 0.0f;
     float lowState = 0.0f;
     float hiLpState = 0.0f;
 
@@ -35,10 +38,11 @@ BandEnergies BandAnalyzer3::analyzeSegment(const float* samples,
     {
         const auto x = samples[i];
 
+        subLpState += subAlpha * (x - subLpState);
         lowState += lowAlpha * (x - lowState);
         hiLpState += highAlpha * (x - hiLpState);
 
-        const auto low = lowState;
+        const auto low = lowState - subLpState;
         const auto high = x - hiLpState;
         const auto mid = x - low - high;
 
@@ -51,21 +55,9 @@ BandEnergies BandAnalyzer3::analyzeSegment(const float* samples,
         highEnergy = smooth * highEnergy + oneMinusSmooth * highSq;
     }
 
-    const auto lowRms = std::sqrt(lowEnergy);
-    const auto midRms = std::sqrt(midEnergy);
-    const auto highRms = std::sqrt(highEnergy);
-
-    const auto total = lowRms + midRms + highRms;
-
-    if (total <= 1.0e-9f)
-    {
-        output.low = output.mid = output.high = 0.0f;
-        return output;
-    }
-
-    output.low = lowRms / total;
-    output.mid = midRms / total;
-    output.high = highRms / total;
+    output.low = std::sqrt(lowEnergy);
+    output.mid = std::sqrt(midEnergy);
+    output.high = std::sqrt(highEnergy);
     return output;
 }
 

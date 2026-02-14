@@ -20,6 +20,30 @@ constexpr float maxGlowExtraThickness = 2.6f;
 constexpr double colourAnalysisWindowSeconds = 0.012;
 constexpr float wrapGateAmplitudeThreshold = 0.08f;
 constexpr float wrapGateDeltaThreshold = 0.35f;
+constexpr float peakFloor = 1.0e-4f;
+
+float smoothToward(float previous, float target, double dtSeconds, double attackTauSeconds, double releaseTauSeconds)
+{
+    const auto tau = target > previous ? attackTauSeconds : releaseTauSeconds;
+    const auto alpha = std::exp(-dtSeconds / tau);
+    return static_cast<float>(alpha * static_cast<double>(previous)
+                              + (1.0 - alpha) * static_cast<double>(target));
+}
+
+float mapBandIntensity(float energy, float normalizationPeak, float intensityPercent)
+{
+    const auto peak = juce::jmax(peakFloor, normalizationPeak);
+    const auto normalized = juce::jmax(0.0f, energy) / peak;
+    const auto clamped = juce::jlimit(0.0f, 1.0f, normalized);
+
+    // Log compression keeps tails visible without clipping strong peaks.
+    constexpr auto compressionAmount = 8.0f;
+    const auto compressed = std::log1p(compressionAmount * clamped) / std::log1p(compressionAmount);
+
+    const auto intensity = juce::jlimit(0.0f, 1.0f, intensityPercent / 100.0f);
+    const auto gamma = juce::jmap(intensity, 0.0f, 1.0f, 1.05f, 0.78f);
+    return std::pow(juce::jlimit(0.0f, 1.0f, compressed), gamma);
+}
 }
 
 WaveformView::WaveformView(WaveformAudioProcessor& processorToUse)
@@ -115,10 +139,14 @@ void WaveformView::paint(juce::Graphics& g)
 
     if (temporalEnergiesByTrack.size() != tracks.size()
         || temporalInitByTrack.size() != tracks.size()
+        || normalizationPeakByTrack.size() != tracks.size()
+        || normalizationPeakInitByTrack.size() != tracks.size()
         || temporalTrackModes.size() != tracks.size())
     {
         temporalEnergiesByTrack.assign(tracks.size(), {});
         temporalInitByTrack.assign(tracks.size(), {});
+        normalizationPeakByTrack.assign(tracks.size(), {});
+        normalizationPeakInitByTrack.assign(tracks.size(), static_cast<uint8_t>(0));
         temporalTrackModes.assign(tracks.size(), RenderMode::left);
         resetAllTemporalState = true;
     }
@@ -256,6 +284,7 @@ void WaveformView::drawTrack(juce::Graphics& g,
 
     const auto clampedLoopPhase = juce::jlimit(0.0f, 1.0f, loopPhase);
     const auto writeX = juce::jlimit(0, width - 1, static_cast<int>(std::floor(clampedLoopPhase * static_cast<float>(width))));
+    BandEnergies framePeak {};
 
     if (width > 0 && numSamples > 0)
     {
@@ -361,6 +390,9 @@ void WaveformView::drawTrack(juce::Graphics& g,
             ampPerX[index] = amplitudeNorm;
             energiesPerX[index] = energies;
             activePerX[index] = static_cast<uint8_t>(1);
+            framePeak.low = juce::jmax(framePeak.low, energies.low);
+            framePeak.mid = juce::jmax(framePeak.mid, energies.mid);
+            framePeak.high = juce::jmax(framePeak.high, energies.high);
         }
     }
 
@@ -379,6 +411,10 @@ void WaveformView::drawTrack(juce::Graphics& g,
         && trackIndex < static_cast<int>(temporalInitByTrack.size())
         && temporalEnergiesByTrack[static_cast<size_t>(trackIndex)].size() == static_cast<size_t>(width)
         && temporalInitByTrack[static_cast<size_t>(trackIndex)].size() == static_cast<size_t>(width);
+    const auto applyDynamicNormalization = colorMode == ColorMode::threeBand
+        && trackIndex >= 0
+        && trackIndex < static_cast<int>(normalizationPeakByTrack.size())
+        && trackIndex < static_cast<int>(normalizationPeakInitByTrack.size());
 
     const auto baseAttackMs = juce::jmap(smoothing, 0.0f, 1.0f, 18.0f, 60.0f);
     const auto baseReleaseMs = juce::jmap(smoothing, 0.0f, 1.0f, 120.0f, 360.0f);
@@ -388,14 +424,48 @@ void WaveformView::drawTrack(juce::Graphics& g,
     const auto releaseTauSeconds = juce::jmax(1.0e-4, static_cast<double>(releaseMs) * 0.001);
     auto* temporalTrack = applyTemporalSmoothing ? &temporalEnergiesByTrack[static_cast<size_t>(trackIndex)] : nullptr;
     auto* temporalInit = applyTemporalSmoothing ? &temporalInitByTrack[static_cast<size_t>(trackIndex)] : nullptr;
+    auto* normalizationPeak = applyDynamicNormalization ? &normalizationPeakByTrack[static_cast<size_t>(trackIndex)] : nullptr;
+    auto* normalizationPeakInit = applyDynamicNormalization ? &normalizationPeakInitByTrack[static_cast<size_t>(trackIndex)] : nullptr;
 
-    const auto smoothBandValue = [dtSeconds, attackTauSeconds, releaseTauSeconds] (float previous, float target)
+    const auto peakAttackTauSeconds = juce::jmax(1.0e-4, static_cast<double>(juce::jmap(smoothing, 0.0f, 1.0f, 0.010f, 0.028f)));
+    const auto peakReleaseTauSeconds = juce::jmax(1.0e-4, static_cast<double>(juce::jmap(smoothing, 0.0f, 1.0f, 0.26f, 0.56f)));
+
+    if (applyDynamicNormalization && normalizationPeak != nullptr && normalizationPeakInit != nullptr)
     {
-        const auto tau = target > previous ? attackTauSeconds : releaseTauSeconds;
-        const auto alpha = std::exp(-dtSeconds / tau);
-        return static_cast<float>(alpha * static_cast<double>(previous)
-                                  + (1.0 - alpha) * static_cast<double>(target));
-    };
+        const auto safeFramePeak = BandEnergies {
+            juce::jmax(peakFloor, framePeak.low),
+            juce::jmax(peakFloor, framePeak.mid),
+            juce::jmax(peakFloor, framePeak.high)
+        };
+
+        if (resetTemporalState || *normalizationPeakInit == 0)
+        {
+            *normalizationPeak = safeFramePeak;
+            *normalizationPeakInit = static_cast<uint8_t>(1);
+        }
+        else
+        {
+            normalizationPeak->low = smoothToward(normalizationPeak->low,
+                                                  safeFramePeak.low,
+                                                  dtSeconds,
+                                                  peakAttackTauSeconds,
+                                                  peakReleaseTauSeconds);
+            normalizationPeak->mid = smoothToward(normalizationPeak->mid,
+                                                  safeFramePeak.mid,
+                                                  dtSeconds,
+                                                  peakAttackTauSeconds,
+                                                  peakReleaseTauSeconds);
+            normalizationPeak->high = smoothToward(normalizationPeak->high,
+                                                   safeFramePeak.high,
+                                                   dtSeconds,
+                                                   peakAttackTauSeconds,
+                                                   peakReleaseTauSeconds);
+        }
+
+        normalizationPeak->low = juce::jmax(peakFloor, normalizationPeak->low);
+        normalizationPeak->mid = juce::jmax(peakFloor, normalizationPeak->mid);
+        normalizationPeak->high = juce::jmax(peakFloor, normalizationPeak->high);
+    }
 
     for (int x = 0; x < width; ++x)
     {
@@ -463,14 +533,6 @@ void WaveformView::drawTrack(juce::Graphics& g,
                 energies.low = juce::jmap(blurMix, energies.low, blurredLow);
                 energies.mid = juce::jmap(blurMix, energies.mid, blurredMid);
                 energies.high = juce::jmap(blurMix, energies.high, blurredHigh);
-
-                const auto sum = energies.low + energies.mid + energies.high;
-                if (sum > 1.0e-6f)
-                {
-                    energies.low /= sum;
-                    energies.mid /= sum;
-                    energies.high /= sum;
-                }
             }
         }
 
@@ -486,24 +548,31 @@ void WaveformView::drawTrack(juce::Graphics& g,
             }
             else
             {
-                smoothed.low = smoothBandValue(smoothed.low, energies.low);
-                smoothed.mid = smoothBandValue(smoothed.mid, energies.mid);
-                smoothed.high = smoothBandValue(smoothed.high, energies.high);
-            }
-
-            const auto sum = smoothed.low + smoothed.mid + smoothed.high;
-            if (sum > 1.0e-6f)
-            {
-                smoothed.low /= sum;
-                smoothed.mid /= sum;
-                smoothed.high /= sum;
-            }
-            else
-            {
-                smoothed = {};
+                smoothed.low = smoothToward(smoothed.low, energies.low, dtSeconds, attackTauSeconds, releaseTauSeconds);
+                smoothed.mid = smoothToward(smoothed.mid, energies.mid, dtSeconds, attackTauSeconds, releaseTauSeconds);
+                smoothed.high = smoothToward(smoothed.high, energies.high, dtSeconds, attackTauSeconds, releaseTauSeconds);
             }
 
             energies = smoothed;
+        }
+
+        if (colorMode == ColorMode::threeBand)
+        {
+            BandEnergies mapped {};
+            if (applyDynamicNormalization && normalizationPeak != nullptr && *normalizationPeakInit != 0)
+            {
+                mapped.low = mapBandIntensity(energies.low, normalizationPeak->low, intensity);
+                mapped.mid = mapBandIntensity(energies.mid, normalizationPeak->mid, intensity);
+                mapped.high = mapBandIntensity(energies.high, normalizationPeak->high, intensity);
+            }
+            else
+            {
+                mapped.low = juce::jlimit(0.0f, 1.0f, energies.low);
+                mapped.mid = juce::jlimit(0.0f, 1.0f, energies.mid);
+                mapped.high = juce::jlimit(0.0f, 1.0f, energies.high);
+            }
+
+            energies = mapped;
         }
 
         auto colour = themeEngine.colourFor(energies,
