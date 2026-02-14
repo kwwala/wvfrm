@@ -18,15 +18,20 @@ FetchContent_MakeAvailable(JUCE)
 
 add_library(wvfrm_core STATIC
   src/JuceIncludes.h
-  src/Parameters.h
-  src/Parameters.cpp
   src/dsp/AnalysisRingBuffer.h
   src/dsp/AnalysisRingBuffer.cpp
+  src/dsp/LoopClock.h
+  src/dsp/LoopClock.cpp
   src/dsp/TimeWindowResolver.h
   src/dsp/TimeWindowResolver.cpp
   src/dsp/BandAnalyzer3.h
   src/dsp/BandAnalyzer3.cpp
   src/dsp/ChannelViews.h
+)
+
+add_library(wvfrm_plugin_support STATIC
+  src/Parameters.h
+  src/Parameters.cpp
   src/ui/ThemeEngine.h
   src/ui/ThemeEngine.cpp
 )
@@ -35,15 +40,23 @@ target_link_libraries(wvfrm_core
   PUBLIC
     juce::juce_core
     juce::juce_audio_basics
-    juce::juce_audio_processors
-    juce::juce_audio_utils
-    juce::juce_dsp
     juce::juce_graphics
-    juce::juce_gui_basics
-    juce::juce_gui_extra
 )
 
 target_include_directories(wvfrm_core PUBLIC src)
+
+target_link_libraries(wvfrm_plugin_support
+  PUBLIC
+    wvfrm_core
+    juce::juce_audio_processors
+    juce::juce_graphics
+    juce::juce_gui_basics
+    juce::juce_opengl
+)
+
+target_include_directories(wvfrm_plugin_support PUBLIC src)
+
+set(WVFRM_PLUGIN_NAME "wvfrm0")
 
 juce_add_plugin(wvfrm
   COMPANY_NAME "Kwwala"
@@ -54,10 +67,16 @@ juce_add_plugin(wvfrm
   EDITOR_WANTS_KEYBOARD_FOCUS FALSE
   COPY_PLUGIN_AFTER_BUILD TRUE
   PLUGIN_MANUFACTURER_CODE WvF0
-  PLUGIN_CODE Wvf0
+  PLUGIN_CODE WvF1
   FORMATS VST3
-  PRODUCT_NAME "wvfrm (branch)"
+  PRODUCT_NAME "${WVFRM_PLUGIN_NAME}"
 )
+
+if(TARGET wvfrm_VST3)
+  set_target_properties(wvfrm_VST3 PROPERTIES
+    OUTPUT_NAME "${WVFRM_PLUGIN_NAME}"
+  )
+endif()
 
 juce_generate_juce_header(wvfrm)
 
@@ -74,7 +93,7 @@ target_sources(wvfrm
 target_link_libraries(wvfrm
   PRIVATE
     wvfrm_core
-    juce::juce_audio_utils
+    wvfrm_plugin_support
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
@@ -90,6 +109,8 @@ enable_testing()
 
 add_executable(wvfrm_tests
   tests/main.cpp
+  tests/AnalysisRingBufferTests.cpp
+  tests/LoopClockTests.cpp
   tests/TimeWindowResolverTests.cpp
   tests/BandAnalyzer3Tests.cpp
   tests/ChannelViewsTests.cpp
